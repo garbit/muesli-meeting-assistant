@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { ipc, type AppInfo, type Settings, type Template } from "../../lib/ipc";
+import { ipc, type AppInfo, type FacetsProgress, type IndexStatus, type Settings, type Template } from "../../lib/ipc";
 import { confirmDialog } from "../../lib/dialogs";
 import { permissions, usePermissions } from "../../lib/permissions";
 
@@ -14,12 +14,51 @@ export default function SettingsPage() {
   const [update, setUpdate] = useState<string>("");
   const [diag, setDiag] = useState<string>("");
   const [error, setError] = useState("");
+  const [index, setIndex] = useState<IndexStatus | null>(null);
+  const [indexNote, setIndexNote] = useState("");
+  const [facetsProgress, setFacetsProgress] = useState<FacetsProgress | null>(null);
 
   useEffect(() => {
     ipc.appInfo().then(setInfo).catch((e) => setError(String(e)));
     ipc.settingsGet().then(setSettings).catch((e) => setError(String(e)));
     ipc.templatesList().then(setTemplates).catch(() => {});
+    const refreshIndex = () => ipc.searchStatus().then(setIndex).catch(() => {});
+    refreshIndex();
+    let timer: number | null = null;
+    const subs = [
+      ipc.onSearchIndex(() => {
+        if (timer) window.clearTimeout(timer);
+        timer = window.setTimeout(refreshIndex, 1000);
+      }),
+      ipc.onFacetsProgress((p) => {
+        setFacetsProgress(p);
+        if (p.finished) refreshIndex();
+      }),
+    ];
+    return () => {
+      subs.forEach((s) => s.then((f) => f()));
+      if (timer) window.clearTimeout(timer);
+    };
   }, []);
+
+  const rebuildIndex = async () => {
+    if (!(await confirmDialog("Rebuild the search index for every meeting? This re-embeds all transcripts and can take a while.", { okLabel: "Rebuild" }))) return;
+    try {
+      const n = await ipc.searchReindex(true);
+      setIndexNote(`Queued ${n} meeting(s).`);
+    } catch (e) {
+      setIndexNote(`Failed: ${String(e)}`);
+    }
+  };
+
+  const backfillFacets = async () => {
+    try {
+      const n = await ipc.facetsBackfill();
+      setIndexNote(n === 0 ? "Every summarised meeting already has topics." : `Extracting topics for ${n} meeting(s)…`);
+    } catch (e) {
+      setIndexNote(`Failed: ${String(e)}`);
+    }
+  };
 
   const updateSettings = (patch: Partial<Settings>) => {
     if (!settings) return;
@@ -145,7 +184,44 @@ export default function SettingsPage() {
             <input type="checkbox" checked={settings?.autoSummarise ?? true} onChange={(e) => updateSettings({ autoSummarise: e.target.checked })} /> after each
             meeting is transcribed
           </dd>
+          <dt className="text-neutral-500">Extract topics</dt>
+          <dd>
+            <input type="checkbox" checked={settings?.extractFacets ?? true} onChange={(e) => updateSettings({ extractFacets: e.target.checked })} /> after each
+            summary, pull out the meeting type, topics, people, decisions and actions for search filters
+          </dd>
         </dl>
+      </section>
+
+      <section>
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Search</h2>
+        <dl className="mt-3 grid grid-cols-[12rem_1fr] gap-y-2 text-sm">
+          <dt className="text-neutral-500">Index</dt>
+          <dd>
+            {index
+              ? `${index.indexed} of ${index.total} meetings indexed${index.pending ? `, ${index.pending} pending` : ""}${index.failed ? `, ${index.failed} failed` : ""}${index.running ? " (indexing…)" : ""}`
+              : "…"}
+          </dd>
+          <dt className="text-neutral-500">Embedding model</dt>
+          <dd>{index ? (index.semanticAvailable ? index.modelId : "not installed (keyword search only); download it under Models") : "…"}</dd>
+        </dl>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button onClick={rebuildIndex} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm dark:border-neutral-700">
+            Rebuild index
+          </button>
+          <button onClick={backfillFacets} disabled={facetsProgress != null && !facetsProgress.finished} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-60 dark:border-neutral-700">
+            {facetsProgress && !facetsProgress.finished ? `Extracting topics ${facetsProgress.done}/${facetsProgress.total}…` : "Extract topics for older meetings"}
+          </button>
+          {facetsProgress && !facetsProgress.finished && (
+            <button onClick={() => ipc.summaryCancel().catch(() => {})} className="text-xs underline">
+              Stop
+            </button>
+          )}
+          {indexNote && <span className="text-xs text-neutral-500">{indexNote}</span>}
+        </div>
+        <p className="mt-2 text-xs text-neutral-500">
+          Transcripts are searchable as soon as they exist. Topic extraction loads the summarisation model, so it only runs after a summary or when
+          started here.
+        </p>
       </section>
 
       <section>

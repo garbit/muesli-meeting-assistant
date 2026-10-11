@@ -14,8 +14,9 @@ use crate::meetings::{self, Meeting};
 
 /// Diarisation clusters with less speech than this are not counted as participants.
 pub const MIN_SPEECH_MS: i64 = 15_000;
-/// Semantic hits below this cosine are noise.
-pub const MIN_COSINE: f32 = 0.35;
+/// Semantic hits below this cosine are noise. Measured with EmbeddingGemma on test data: paraphrases
+/// score 0.47 to 0.63, exact single words about 0.42, unrelated short chunks up to 0.37.
+pub const MIN_COSINE: f32 = 0.40;
 const RRF_K: f32 = 60.0;
 const TOP_CHUNKS: usize = 200;
 const SNIPPETS_PER_MEETING: usize = 3;
@@ -261,7 +262,110 @@ pub fn fts_terms(q: &str) -> Vec<String> {
     {
         terms[i].push('*');
     }
-    terms
+    // Stop words only add noise (every chunk has "the"); drop them when anything else remains.
+    let kept: Vec<String> = terms.iter().filter(|t| !is_stop_term(t)).cloned().collect();
+    if kept.is_empty() { terms } else { kept }
+}
+
+const STOP_WORDS: &[&str] = &[
+    "a",
+    "an",
+    "and",
+    "or",
+    "of",
+    "to",
+    "in",
+    "on",
+    "for",
+    "with",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "do",
+    "does",
+    "did",
+    "how",
+    "what",
+    "when",
+    "where",
+    "who",
+    "why",
+    "which",
+    "much",
+    "many",
+    "this",
+    "that",
+    "these",
+    "those",
+    "it",
+    "its",
+    "we",
+    "i",
+    "you",
+    "they",
+    "he",
+    "she",
+    "at",
+    "by",
+    "from",
+    "as",
+    "about",
+    "our",
+    "your",
+    "my",
+    "their",
+    "the",
+    "can",
+    "could",
+    "would",
+    "should",
+    "will",
+    "there",
+    "here",
+    "have",
+    "has",
+    "had",
+    "not",
+    "no",
+    "so",
+    "if",
+    "than",
+    "then",
+    "up",
+    "out",
+    "into",
+    "over",
+    "any",
+    "all",
+    "some",
+    "me",
+    "us",
+    "them",
+    "him",
+    "her",
+    "just",
+    "also",
+    "get",
+    "got",
+    "like",
+    "say",
+    "said",
+    "tell",
+    "told",
+    "talk",
+    "talked",
+    "discuss",
+    "discussed",
+    "mention",
+    "mentioned",
+];
+
+fn is_stop_term(t: &str) -> bool {
+    let w = t.trim_end_matches('*').trim_matches('"');
+    !w.contains(' ') && STOP_WORDS.contains(&w.to_ascii_lowercase().as_str())
 }
 
 fn push_words(s: &str, terms: &mut Vec<String>, last_loose: &mut Option<usize>) {
@@ -565,12 +669,11 @@ pub fn rank(ctx: &IndexCtx, req: &SearchRequest) -> Result<Ranked> {
         match embedder.load(&path).and_then(|_| embedder.embed_query(query)) {
             Ok(q) => {
                 ctx.vectors.ensure_loaded(&ctx.db)?;
-                semantic_hits = ctx
-                    .vectors
-                    .search(&q, Some(&id_set), TOP_CHUNKS)
-                    .into_iter()
-                    .filter(|h| h.score >= MIN_COSINE)
-                    .collect();
+                let hits = ctx.vectors.search(&q, Some(&id_set), TOP_CHUNKS);
+                for h in hits.iter().take(8) {
+                    tracing::debug!("semantic: chunk {} of {} cos {:.3}", h.chunk_id, h.meeting_id, h.score);
+                }
+                semantic_hits = hits.into_iter().filter(|h| h.score >= MIN_COSINE).collect();
                 semantic = true;
             }
             Err(e) => tracing::warn!("semantic search unavailable: {e:#}"),
@@ -725,8 +828,18 @@ mod tests {
     fn fts_terms_quote_phrases_and_prefix_the_last_word() {
         assert_eq!(fts_terms("pricing tiers"), vec!["\"pricing\"", "\"tiers\"*"]);
         assert_eq!(fts_terms("\"pricing tiers\" sso"), vec!["\"pricing tiers\"", "\"sso\"*"]);
-        assert_eq!(fts_terms("say \"hello there"), vec!["\"say\"", "\"hello\"", "\"there\"*"]);
-        assert_eq!(fts_terms("a b"), vec!["\"a\"", "\"b\""], "short words get no prefix star");
+        assert_eq!(
+            fts_terms("say \"hello there"),
+            vec!["\"hello\""],
+            "unterminated quote: loose words, stop words dropped"
+        );
+        assert_eq!(fts_terms("a b"), vec!["\"b\""], "stop words drop out; short words get no prefix star");
+        assert_eq!(
+            fts_terms("how much does the enterprise plan cost"),
+            vec!["\"enterprise\"", "\"plan\"", "\"cost\"*"]
+        );
+        assert_eq!(fts_terms("the"), vec!["\"the\"*"], "all stop words: keep them (starred) rather than nothing");
+        assert_eq!(fts_terms("\"the launch\""), vec!["\"the launch\""], "phrases are never pruned");
         assert_eq!(fts_terms("  --  "), Vec::<String>::new());
         assert_eq!(fts_terms("O'Brien"), vec!["\"O\"", "\"Brien\"*"]);
     }

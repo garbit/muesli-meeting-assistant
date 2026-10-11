@@ -294,6 +294,15 @@ fn embed(ctx: &mut LlamaContext<'_>, l: &Loaded, items: &[EmbedItem]) -> Result<
     let n_ctx = l.info.n_ctx as usize;
     let mut tokenized: Vec<Vec<LlamaToken>> = Vec::with_capacity(items.len());
     for item in items {
+        // Nothing to embed: a zero vector, flagged below (the prompt alone would still tokenize).
+        let raw_empty = match item {
+            EmbedItem::Query(q) => q.trim().is_empty(),
+            EmbedItem::Document { text, .. } => text.trim().is_empty(),
+        };
+        if raw_empty {
+            tokenized.push(Vec::new());
+            continue;
+        }
         let text = match item {
             EmbedItem::Query(q) => l.arch.query_prompt(q),
             EmbedItem::Document { title, text } => l.arch.document_prompt(title.as_deref(), text),

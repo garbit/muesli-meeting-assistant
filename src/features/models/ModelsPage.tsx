@@ -26,7 +26,7 @@ export default function ModelsPage() {
   }, []);
 
   const groups = useMemo(() => {
-    const by: Record<string, AppInfo["models"]> = { asr: [], diarisation: [], llm: [] };
+    const by: Record<string, AppInfo["models"]> = { asr: [], diarisation: [], llm: [], embedding: [] };
     info?.models.forEach((m) => by[m.kind]?.push(m));
     return by;
   }, [info]);
@@ -55,11 +55,14 @@ export default function ModelsPage() {
         Only models on the approved list can be installed. Everything runs on this Mac.
       </p>
       {error && <p className="mt-3 rounded bg-red-50 p-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">{error}</p>}
-      {(["asr", "diarisation", "llm"] as const).map((kind) => (
+      {(["asr", "diarisation", "llm", "embedding"] as const).map((kind) => (
         <section key={kind} className="mt-6">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
-            {kind === "asr" ? "Speech to text" : kind === "diarisation" ? "Speaker diarisation" : "Summarisation"}
+            {kind === "asr" ? "Speech to text" : kind === "diarisation" ? "Speaker diarisation" : kind === "llm" ? "Summarisation" : "Search"}
           </h2>
+          {kind === "embedding" && (
+            <p className="mt-1 text-xs text-neutral-500">Turns transcripts, summaries and notes into vectors so search finds meetings by meaning, not only by exact words.</p>
+          )}
           <ul className="mt-2 divide-y divide-neutral-200 rounded-lg border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
             {groups[kind].map((m) => {
               const st = status[m.id];

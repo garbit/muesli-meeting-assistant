@@ -60,6 +60,10 @@ MUESLI_NAME_SPEAKERS="S1=Alice,S2=Bob" target/debug/muesli --import call.wav   #
 # headless runs use a scratch library under $TMPDIR/muesli-headless unless MUESLI_HOME is set
 open "$PWD/target/debug/bundle/macos/Muesli.app" --args --capture-test 10 /tmp/cap  # record 10 s as the bundle (prompts attributed to Muesli; needs the absolute path)
 scripts/tcc-reset.sh                                # forget Muesli's privacy grants during development
+# search works against the real library (or MUESLI_HOME), not the scratch one
+target/debug/muesli --search pricing tiers --speaker Alice --since 2026-10-01
+target/debug/muesli --reindex                       # rebuild stale search index entries synchronously
+target/debug/muesli --ask "What did we decide about pricing?"   # answer with [n] citations (needs the summarisation model)
 ```
 
 ## Troubleshooting

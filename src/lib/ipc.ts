@@ -5,7 +5,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export interface ManifestModel {
   id: string;
-  kind: "asr" | "diarisation" | "llm";
+  kind: "asr" | "diarisation" | "llm" | "embedding";
   name: string;
   organisation: string;
   licence: string;
@@ -184,6 +184,155 @@ export interface Settings {
   autoTranscribe: boolean;
   autoSummarise: boolean;
   liveTranscript: boolean;
+  /** Extract topics, people and decisions from each new summary (one more LLM pass). */
+  extractFacets: boolean;
+}
+
+// ---- search ----------------------------------------------------------------
+
+export type SpeakerMode = "all" | "any";
+
+export interface FacetRef {
+  kind: string;
+  value: string;
+}
+
+/** Every field is optional; the Rust side fills defaults. */
+export interface SearchRequest {
+  query?: string;
+  /** Speaker ids, or names for clusters that were named but never linked. */
+  speakerIds?: string[];
+  speakerMode?: SpeakerMode;
+  /** YYYY-MM-DD, inclusive. */
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  minSpeakers?: number | null;
+  maxSpeakers?: number | null;
+  minDurationMs?: number | null;
+  maxDurationMs?: number | null;
+  source?: "recorded" | "imported" | null;
+  hasSummary?: boolean | null;
+  facets?: FacetRef[];
+  /** Chunk kinds to search; empty = all. */
+  kinds?: string[];
+  limit?: number;
+  offset?: number;
+}
+
+export interface HitSpeaker {
+  diarLabel: string;
+  name: string;
+  speakerId?: string | null;
+}
+
+export interface Snippet {
+  chunkId: number;
+  kind: "title" | "notes" | "transcript" | "summary" | "facets";
+  section?: string | null;
+  startMs?: number | null;
+  endMs?: number | null;
+  speaker?: string | null;
+  /** Keyword hits wrap matches in « »; semantic snippets are plain. */
+  text: string;
+  score: number;
+  matchedBy: "semantic" | "keyword" | "both";
+}
+
+export interface SearchHit {
+  meeting: Meeting;
+  score: number;
+  speakers: HitSpeaker[];
+  speakerCount: number;
+  snippets: Snippet[];
+}
+
+export interface IndexStatus {
+  indexed: number;
+  pending: number;
+  failed: number;
+  total: number;
+  queued: number;
+  running: boolean;
+  modelId?: string | null;
+  semanticAvailable: boolean;
+}
+
+export interface SearchResponse {
+  hits: SearchHit[];
+  /** Meetings that passed the filters, before ranking and paging. */
+  candidates: number;
+  /** Vectors took part in the ranking. */
+  semantic: boolean;
+  totalHits: number;
+  index: IndexStatus;
+}
+
+export interface SpeakerCount {
+  /** Value for `speakerIds`. */
+  id: string;
+  name: string;
+  count: number;
+}
+
+export interface ValueCount {
+  value: string;
+  count: number;
+}
+
+export interface FacetCounts {
+  candidates: number;
+  speakers: SpeakerCount[];
+  speakerCount: { min?: number | null; max?: number | null };
+  dates: { min?: string | null; max?: string | null };
+  facets: Record<string, ValueCount[]>;
+}
+
+export interface IndexProgress {
+  meetingId: string;
+  state: "indexed" | "failed";
+  pending: number;
+  error?: string | null;
+}
+
+export interface RelatedMeeting {
+  meeting: Meeting;
+  score: number;
+  sharedSpeakers: string[];
+  sharedTopics: string[];
+}
+
+export interface Facet {
+  kind: "type" | "topic" | "person" | "org" | "project" | "decision" | "action";
+  value: string;
+  detail?: Record<string, unknown> | null;
+}
+
+export interface FacetsProgress {
+  done: number;
+  total: number;
+  meetingId?: string | null;
+  finished: boolean;
+}
+
+export interface Citation {
+  n: number;
+  chunkId: number;
+  meetingId: string;
+  title: string;
+  date: string;
+  kind: string;
+  startMs?: number | null;
+  section?: string | null;
+  speaker?: string | null;
+}
+
+export interface AskEvent {
+  askId: string;
+  token?: string | null;
+  status: "running" | "done" | "failed" | "cancelled";
+  answer?: string | null;
+  citations: Citation[];
+  error?: string | null;
 }
 
 export interface LiveSegment {
@@ -285,7 +434,25 @@ export const ipc = {
   meetingExportTo: (meetingId: string, path: string, summaryId?: string) =>
     invoke<string[]>("meeting_export_to", { meetingId, summaryId, path }),
 
+  searchMeetings: (req: SearchRequest) => invoke<SearchResponse>("search_meetings", { req }),
+  searchFacets: (req: SearchRequest) => invoke<FacetCounts>("search_facets", { req }),
+  searchStatus: () => invoke<IndexStatus>("search_status"),
+  /** `all` forgets every fingerprint first; returns how many meetings were queued. */
+  searchReindex: (all: boolean) => invoke<number>("search_reindex", { all }),
+  /** Loads the embedding model ahead of the first query. */
+  searchWarm: () => invoke<boolean>("search_warm"),
+  meetingRelated: (id: string, limit = 5) => invoke<RelatedMeeting[]>("meeting_related", { id, limit }),
+  meetingFacets: (meetingId: string) => invoke<Facet[]>("meeting_facets", { meetingId }),
+  /** Extracts facets for every summarised meeting without them; returns the count queued. */
+  facetsBackfill: () => invoke<number>("facets_backfill"),
+  askMeetings: (question: string, filters?: SearchRequest) => invoke<{ askId: string }>("ask_meetings", { question, filters }),
+  askCancel: () => invoke<boolean>("ask_cancel"),
+
   onModelsProgress: (cb: (p: DownloadProgress) => void) => on<DownloadProgress>("models:progress", cb),
+  onSearchIndex: (cb: (p: IndexProgress) => void) => on<IndexProgress>("search:index", cb),
+  onFacetsProgress: (cb: (p: FacetsProgress) => void) => on<FacetsProgress>("facets:progress", cb),
+  onAskToken: (cb: (p: AskEvent) => void) => on<AskEvent>("ask:token", cb),
+  onAskDone: (cb: (p: AskEvent) => void) => on<AskEvent>("ask:done", cb),
   onSummaryToken: (cb: (p: SummaryEvent) => void) => on<SummaryEvent>("summary:token", cb),
   onSummaryDone: (cb: (p: SummaryEvent) => void) => on<SummaryEvent>("summary:done", cb),
   onRecordingStatus: (cb: (p: RecordingStatus) => void) => on<RecordingStatus>("recording:status", cb),

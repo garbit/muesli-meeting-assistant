@@ -17,10 +17,18 @@ LLM loader refuses paths that were not produced by the manifest.
 | `gemma-4-26b-a4b-it-q4_0` | summarisation (Balanced preset, default) | Google Gemma 4 26B-A4B (US) | llama.cpp | Apache-2.0 |
 | `gemma-4-31b-it-q4_0` | summarisation (optional, slow) | Google Gemma 4 31B (US) | llama.cpp | Apache-2.0 |
 | `gpt-oss-20b-mxfp4` | summarisation (optional) | OpenAI gpt-oss-20b (US) | llama.cpp | Apache-2.0 |
+| `embeddinggemma-300m-q8_0` | search embeddings | Google EmbeddingGemma 300M (US) | llama.cpp | Gemma Terms of Use |
 
 All GGUFs are the `ggml-org` conversions on Hugging Face. CoreML bundles come
 from the `FluidInference` organisation on Hugging Face; the diarisation repo is
 pinned to a commit by FluidAudio.
+
+EmbeddingGemma is the first entry under the **Gemma Terms of Use** rather than
+Apache-2.0 or CC-BY. Commercial use is permitted; the Gemma prohibited-use
+policy applies to what users do with the model; and the weights are downloaded
+by the user from Hugging Face at runtime, never redistributed with the app. The
+`ggml-org` GGUF includes the model's dense output layers, so its vectors match
+the published model; Muesli keeps the first 256 of 768 dimensions (Matryoshka).
 
 ## Considered and rejected
 
@@ -35,6 +43,11 @@ pinned to a commit by FluidAudio.
   **CAM++/WeSpeaker pretrained checkpoints**: excluded by origin.
 * **Legacy `wespeaker_v2.mlmodelc`** in the FluidInference diarisation repo:
   original WeSpeaker-trained weights; never downloaded (variant `offline` only).
+* **nomic-embed-text-v1.5** (Nomic, US; Apache-2.0) for search embeddings:
+  acceptable origin and licence but weaker retrieval than EmbeddingGemma. The
+  embedder still accepts the `nomic-bert` architecture as a fallback.
+* **Apple NLContextualEmbedding** for search embeddings: nothing to download,
+  but the weakest retrieval quality of the three.
 
 ## Deferred (M6)
 
