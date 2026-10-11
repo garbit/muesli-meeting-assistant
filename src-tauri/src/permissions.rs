@@ -12,8 +12,8 @@ use serde_json::json;
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
-use crate::sidecar::{Role, Sidecar};
 use crate::AppState;
+use crate::sidecar::{Role, Sidecar};
 
 const SETTING_KEY: &str = "acknowledged_code_hash";
 
@@ -66,7 +66,11 @@ async fn probe(state: &AppState) -> CmdResult<PermissionsStatus> {
 }
 
 #[tauri::command]
-pub async fn permissions_status(state: State<'_, AppState>, cache: State<'_, PermissionsCache>, refresh: Option<bool>) -> CmdResult<PermissionsStatus> {
+pub async fn permissions_status(
+    state: State<'_, AppState>,
+    cache: State<'_, PermissionsCache>,
+    refresh: Option<bool>,
+) -> CmdResult<PermissionsStatus> {
     if refresh != Some(true)
         && let Some(s) = cache.status.lock().map_err(|e| e.to_string())?.clone()
     {
@@ -79,7 +83,10 @@ pub async fn permissions_status(state: State<'_, AppState>, cache: State<'_, Per
 
 /// Trigger the microphone prompt (attributed to Muesli) and remember this build.
 #[tauri::command]
-pub async fn permissions_request(state: State<'_, AppState>, cache: State<'_, PermissionsCache>) -> CmdResult<PermissionsStatus> {
+pub async fn permissions_request(
+    state: State<'_, AppState>,
+    cache: State<'_, PermissionsCache>,
+) -> CmdResult<PermissionsStatus> {
     if let Ok(sc) = Sidecar::spawn(Role::Capture, &state.paths.fluid_models()).await {
         let _ = sc.call_timeout("permissions.request", json!({}), std::time::Duration::from_secs(120)).await;
         sc.shutdown().await;
@@ -96,7 +103,10 @@ fn acknowledge(state: &AppState) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub async fn permissions_acknowledge(state: State<'_, AppState>, cache: State<'_, PermissionsCache>) -> CmdResult<PermissionsStatus> {
+pub async fn permissions_acknowledge(
+    state: State<'_, AppState>,
+    cache: State<'_, PermissionsCache>,
+) -> CmdResult<PermissionsStatus> {
     acknowledge(&state)?;
     let s = probe(&state).await?;
     *cache.status.lock().map_err(|e| e.to_string())? = Some(s.clone());

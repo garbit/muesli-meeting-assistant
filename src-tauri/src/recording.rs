@@ -3,22 +3,22 @@
 //! and hands the finished recording to the processing pipeline.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 
+use crate::AppState;
 use crate::db::now_iso;
 use crate::jobs;
 use crate::meetings::{self, Meeting};
 use crate::sidecar::{Role, RpcError, Sidecar};
 use crate::tray;
-use crate::AppState;
 
 /// `capture.start` can block while macOS shows a permission prompt.
 const START_TIMEOUT: Duration = Duration::from_secs(90);
@@ -65,7 +65,9 @@ enum Phase {
     Idle,
     /// `capture.start` in flight; it can block for seconds while macOS shows a
     /// permission prompt, so the mutex is not held during that time.
-    Starting { meeting_id: String },
+    Starting {
+        meeting_id: String,
+    },
     Recording(Session),
 }
 
@@ -103,7 +105,12 @@ impl Recorder {
     pub async fn status(&self) -> Option<RecordingStatus> {
         match &*self.phase.lock().await {
             Phase::Idle => None,
-            Phase::Starting { meeting_id } => Some(RecordingStatus { meeting_id: meeting_id.clone(), elapsed_ms: 0, starting: true, status: json!({}) }),
+            Phase::Starting { meeting_id } => Some(RecordingStatus {
+                meeting_id: meeting_id.clone(),
+                elapsed_ms: 0,
+                starting: true,
+                status: json!({}),
+            }),
             Phase::Recording(s) => {
                 let status = s.last_status.lock().map(|v| v.clone()).unwrap_or_else(|_| json!({}));
                 // The sidecar's clock is authoritative; ours only covers the gap before its first status.
@@ -182,8 +189,17 @@ impl Recorder {
                         if let Ok(mut v) = ls.lock() {
                             *v = n.params.clone();
                         }
-                        let elapsed = n.params["elapsedMs"].as_u64().unwrap_or_else(|| spawned.elapsed().as_millis() as u64);
-                        let _ = app2.emit("recording:status", RecordingStatus { meeting_id: mid.clone(), elapsed_ms: elapsed, starting: false, status: n.params });
+                        let elapsed =
+                            n.params["elapsedMs"].as_u64().unwrap_or_else(|| spawned.elapsed().as_millis() as u64);
+                        let _ = app2.emit(
+                            "recording:status",
+                            RecordingStatus {
+                                meeting_id: mid.clone(),
+                                elapsed_ms: elapsed,
+                                starting: false,
+                                status: n.params,
+                            },
+                        );
                         if elapsed / 1000 != last_tray {
                             last_tray = elapsed / 1000;
                             tray::set_recording(&app2, Some(elapsed));
@@ -199,7 +215,10 @@ impl Recorder {
                                     l.volatile = Some(seg.clone());
                                 }
                             }
-                            let _ = app2.emit("recording:transcript", LiveTranscriptEvent { meeting_id: mid.clone(), segment: seg });
+                            let _ = app2.emit(
+                                "recording:transcript",
+                                LiveTranscriptEvent { meeting_id: mid.clone(), segment: seg },
+                            );
                         }
                     }
                     _ => {}
@@ -212,7 +231,15 @@ impl Recorder {
             sidecar.shutdown().await;
             return Err(anyhow!("capture.start failed: {e}"));
         }
-        Ok(Session { meeting_id: meeting_id.to_string(), sidecar, started: Instant::now(), forwarder, last_status, live, finalising })
+        Ok(Session {
+            meeting_id: meeting_id.to_string(),
+            sidecar,
+            started: Instant::now(),
+            forwarder,
+            last_status,
+            live,
+            finalising,
+        })
     }
 
     pub async fn stop(&self, app: &AppHandle) -> Result<Meeting> {
@@ -305,7 +332,8 @@ impl Recorder {
 /// authoritative (its last notifications can arrive after the response); the
 /// segments forwarded during the meeting are the fallback.
 fn save_live_transcript(state: &AppState, session: &Session, stop_result: &Value) {
-    let mut segments: Vec<LiveSegment> = serde_json::from_value(stop_result["liveSegments"].clone()).unwrap_or_default();
+    let mut segments: Vec<LiveSegment> =
+        serde_json::from_value(stop_result["liveSegments"].clone()).unwrap_or_default();
     if segments.is_empty() {
         let Ok(live) = session.live.lock() else { return };
         segments = live.confirmed.clone();
@@ -317,7 +345,9 @@ fn save_live_transcript(state: &AppState, session: &Session, stop_result: &Value
         return;
     }
     let path = state.paths.meeting_dir(&session.meeting_id).join("live.json");
-    let written = serde_json::to_vec_pretty(&segments).map_err(anyhow::Error::from).and_then(|json| std::fs::write(&path, json).map_err(Into::into));
+    let written = serde_json::to_vec_pretty(&segments)
+        .map_err(anyhow::Error::from)
+        .and_then(|json| std::fs::write(&path, json).map_err(Into::into));
     if let Err(e) = written {
         tracing::warn!("saving live transcript for {}: {e:#}", session.meeting_id);
     }
@@ -501,7 +531,11 @@ async fn recover_meeting(app: &AppHandle, sc: &Sidecar, meeting_id: &str, enqueu
 type CmdResult<T> = Result<T, String>;
 
 #[tauri::command]
-pub async fn recording_start(app: AppHandle, recorder: State<'_, Arc<Recorder>>, title: Option<String>) -> CmdResult<Meeting> {
+pub async fn recording_start(
+    app: AppHandle,
+    recorder: State<'_, Arc<Recorder>>,
+    title: Option<String>,
+) -> CmdResult<Meeting> {
     recorder.start(&app, title).await.map_err(|e| format!("{e:#}"))
 }
 
@@ -531,7 +565,12 @@ pub fn meeting_live_transcript(state: State<'_, AppState>, meeting_id: String) -
 /// Import an existing audio/video file: copy it into the meeting folder and
 /// run the processing pipeline.
 #[tauri::command]
-pub async fn import_file(app: AppHandle, state: State<'_, AppState>, path: String, title: Option<String>) -> CmdResult<Meeting> {
+pub async fn import_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    title: Option<String>,
+) -> CmdResult<Meeting> {
     let src = std::path::PathBuf::from(&path);
     if !src.is_file() {
         return Err(format!("not a file: {path}"));

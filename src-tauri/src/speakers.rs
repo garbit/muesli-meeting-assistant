@@ -2,13 +2,13 @@
 //! by cosine distance against each new meeting's diarised clusters.
 
 use anyhow::Result;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+use crate::AppState;
 use crate::db::{new_id, now_iso};
 use crate::jobs::blob_to_f32s;
-use crate::AppState;
 
 /// Cosine distance below which a cluster is auto-linked to a known speaker.
 /// FluidAudio's guide: < 0.5 same speaker (high confidence), > 0.7 different.
@@ -63,16 +63,27 @@ pub fn best_match(c: &Connection, embedding: &[f32]) -> Result<Option<(String, S
 
 /// The speaker flagged as the local user, if any: `(id, name)`.
 pub fn me_speaker(c: &Connection) -> Result<Option<(String, String)>> {
-    Ok(c.query_row("SELECT id, name FROM speakers WHERE is_me = 1 LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
+    Ok(c.query_row("SELECT id, name FROM speakers WHERE is_me = 1 LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?)
 }
 
 /// Link a meeting's diarised cluster to a known speaker (creating one when
 /// `speaker_id` is None), and fold the cluster embedding into the speaker's
 /// running mean. Naming a cluster "Me" always resolves to the single `is_me`
 /// speaker, creating it if needed.
-pub fn link_cluster(c: &Connection, meeting_id: &str, diar_label: &str, speaker_id: Option<&str>, name: &str) -> Result<String> {
+pub fn link_cluster(
+    c: &Connection,
+    meeting_id: &str,
+    diar_label: &str,
+    speaker_id: Option<&str>,
+    name: &str,
+) -> Result<String> {
     let cluster_emb: Option<Vec<u8>> = c
-        .query_row("SELECT embedding FROM meeting_speakers WHERE meeting_id = ?1 AND diar_label = ?2", params![meeting_id, diar_label], |r| r.get(0))
+        .query_row(
+            "SELECT embedding FROM meeting_speakers WHERE meeting_id = ?1 AND diar_label = ?2",
+            params![meeting_id, diar_label],
+            |r| r.get(0),
+        )
         .optional()?
         .flatten();
     let wants_me = name.eq_ignore_ascii_case("me");
@@ -82,18 +93,26 @@ pub fn link_cluster(c: &Connection, meeting_id: &str, diar_label: &str, speaker_
             Some((id, _)) => id,
             None => {
                 let id = new_id();
-                c.execute("INSERT INTO speakers(id, name, is_me, sample_count, created_at) VALUES (?1, 'Me', 1, 0, ?2)", params![id, now_iso()])?;
+                c.execute(
+                    "INSERT INTO speakers(id, name, is_me, sample_count, created_at) VALUES (?1, 'Me', 1, 0, ?2)",
+                    params![id, now_iso()],
+                )?;
                 id
             }
         },
         None => {
             // Reuse an existing speaker with the same name rather than duplicating.
-            let existing: Option<String> = c.query_row("SELECT id FROM speakers WHERE name = ?1 COLLATE NOCASE", [name], |r| r.get(0)).optional()?;
+            let existing: Option<String> = c
+                .query_row("SELECT id FROM speakers WHERE name = ?1 COLLATE NOCASE", [name], |r| r.get(0))
+                .optional()?;
             match existing {
                 Some(id) => id,
                 None => {
                     let id = new_id();
-                    c.execute("INSERT INTO speakers(id, name, is_me, sample_count, created_at) VALUES (?1, ?2, 0, 0, ?3)", params![id, name, now_iso()])?;
+                    c.execute(
+                        "INSERT INTO speakers(id, name, is_me, sample_count, created_at) VALUES (?1, ?2, 0, 0, ?3)",
+                        params![id, name, now_iso()],
+                    )?;
                     id
                 }
             }
@@ -104,7 +123,10 @@ pub fn link_cluster(c: &Connection, meeting_id: &str, diar_label: &str, speaker_
     let name = name.as_str();
     if let Some(blob) = cluster_emb {
         let new = blob_to_f32s(&blob);
-        let (old_blob, n): (Option<Vec<u8>>, i64) = c.query_row("SELECT embedding, sample_count FROM speakers WHERE id = ?1", [&id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let (old_blob, n): (Option<Vec<u8>>, i64) =
+            c.query_row("SELECT embedding, sample_count FROM speakers WHERE id = ?1", [&id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?;
         let merged = match old_blob {
             Some(ob) if n > 0 => {
                 let old = blob_to_f32s(&ob);
@@ -132,7 +154,15 @@ pub fn list(c: &Connection) -> Result<Vec<Speaker>> {
          FROM speakers s ORDER BY s.last_seen_at DESC, s.name",
     )?;
     let rows = stmt.query_map([], |r| {
-        Ok(Speaker { id: r.get(0)?, name: r.get(1)?, is_me: r.get::<_, i64>(2)? != 0, sample_count: r.get(3)?, created_at: r.get(4)?, last_seen_at: r.get(5)?, meetings: r.get(6)? })
+        Ok(Speaker {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            is_me: r.get::<_, i64>(2)? != 0,
+            sample_count: r.get(3)?,
+            created_at: r.get(4)?,
+            last_seen_at: r.get(5)?,
+            meetings: r.get(6)?,
+        })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
@@ -148,22 +178,39 @@ pub fn speakers_list(state: State<'_, AppState>) -> CmdResult<Vec<Speaker>> {
 
 /// Name a diarised cluster. Creates or links a known speaker and remembers the voice.
 #[tauri::command]
-pub fn speaker_assign(state: State<'_, AppState>, meeting_id: String, diar_label: String, name: String, speaker_id: Option<String>) -> CmdResult<String> {
+pub fn speaker_assign(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    diar_label: String,
+    name: String,
+    speaker_id: Option<String>,
+) -> CmdResult<String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("name is empty".into());
     }
-    state.db.with(|c| link_cluster(c, &meeting_id, &diar_label, speaker_id.as_deref(), &name)).map_err(|e| e.to_string())
+    state
+        .db
+        .with(|c| link_cluster(c, &meeting_id, &diar_label, speaker_id.as_deref(), &name))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn speaker_update(state: State<'_, AppState>, id: String, name: Option<String>, is_me: Option<bool>) -> CmdResult<()> {
+pub fn speaker_update(
+    state: State<'_, AppState>,
+    id: String,
+    name: Option<String>,
+    is_me: Option<bool>,
+) -> CmdResult<()> {
     state
         .db
         .with(|c| {
             if let Some(n) = name {
                 c.execute("UPDATE speakers SET name = ?2 WHERE id = ?1", params![id, n.trim()])?;
-                c.execute("UPDATE meeting_speakers SET display_name = ?2 WHERE speaker_id = ?1", params![id, n.trim()])?;
+                c.execute(
+                    "UPDATE meeting_speakers SET display_name = ?2 WHERE speaker_id = ?1",
+                    params![id, n.trim()],
+                )?;
             }
             if let Some(me) = is_me {
                 if me {
@@ -186,20 +233,37 @@ pub fn speaker_merge(state: State<'_, AppState>, from: String, into: String) -> 
         .db
         .with_mut(|c| {
             let tx = c.transaction()?;
-            let (ea, na): (Option<Vec<u8>>, i64) = tx.query_row("SELECT embedding, sample_count FROM speakers WHERE id = ?1", [&into], |r| Ok((r.get(0)?, r.get(1)?)))?;
-            let (eb, nb): (Option<Vec<u8>>, i64) = tx.query_row("SELECT embedding, sample_count FROM speakers WHERE id = ?1", [&from], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            let (ea, na): (Option<Vec<u8>>, i64) =
+                tx.query_row("SELECT embedding, sample_count FROM speakers WHERE id = ?1", [&into], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?;
+            let (eb, nb): (Option<Vec<u8>>, i64) =
+                tx.query_row("SELECT embedding, sample_count FROM speakers WHERE id = ?1", [&from], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?;
             let merged = match (ea, eb) {
                 (Some(a), Some(b)) if na + nb > 0 => {
                     let (a, b) = (blob_to_f32s(&a), blob_to_f32s(&b));
-                    Some(a.iter().zip(b.iter()).map(|(x, y)| (x * na as f32 + y * nb as f32) / (na + nb) as f32).collect::<Vec<f32>>())
+                    Some(
+                        a.iter()
+                            .zip(b.iter())
+                            .map(|(x, y)| (x * na as f32 + y * nb as f32) / (na + nb) as f32)
+                            .collect::<Vec<f32>>(),
+                    )
                 }
                 (Some(a), None) => Some(blob_to_f32s(&a)),
                 (None, Some(b)) => Some(blob_to_f32s(&b)),
                 _ => None,
             };
-            tx.execute("UPDATE speakers SET embedding = ?2, sample_count = ?3 WHERE id = ?1", params![into, merged.map(|m| f32s_to_blob(&m)), na + nb])?;
+            tx.execute(
+                "UPDATE speakers SET embedding = ?2, sample_count = ?3 WHERE id = ?1",
+                params![into, merged.map(|m| f32s_to_blob(&m)), na + nb],
+            )?;
             let name: String = tx.query_row("SELECT name FROM speakers WHERE id = ?1", [&into], |r| r.get(0))?;
-            tx.execute("UPDATE meeting_speakers SET speaker_id = ?2, display_name = ?3 WHERE speaker_id = ?1", params![from, into, name])?;
+            tx.execute(
+                "UPDATE meeting_speakers SET speaker_id = ?2, display_name = ?3 WHERE speaker_id = ?1",
+                params![from, into, name],
+            )?;
             tx.execute("UPDATE segments SET speaker_id = ?2 WHERE speaker_id = ?1", params![from, into])?;
             tx.execute("DELETE FROM speakers WHERE id = ?1", [&from])?;
             tx.commit()?;

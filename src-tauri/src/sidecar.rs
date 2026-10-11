@@ -6,16 +6,16 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{broadcast, oneshot, Mutex};
+use tokio::sync::{Mutex, broadcast, oneshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -155,7 +155,12 @@ impl Sidecar {
                 None => None,
             };
             if let Some(f) = file.as_mut() {
-                let _ = f.write_all(format!("\n=== {} {role_name} sidecar started ===\n", chrono::Local::now().to_rfc3339()).as_bytes()).await;
+                let _ = f
+                    .write_all(
+                        format!("\n=== {} {role_name} sidecar started ===\n", chrono::Local::now().to_rfc3339())
+                            .as_bytes(),
+                    )
+                    .await;
             }
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
@@ -207,7 +212,10 @@ impl Sidecar {
         let written: Result<(), RpcError> = async {
             let mut guard = self.stdin.lock().await;
             let stdin = guard.as_mut().ok_or(RpcError::Closed)?;
-            stdin.write_all(line.as_bytes()).await.map_err(|e| RpcError::Other(anyhow!("writing to sidecar stdin: {e}")))?;
+            stdin
+                .write_all(line.as_bytes())
+                .await
+                .map_err(|e| RpcError::Other(anyhow!("writing to sidecar stdin: {e}")))?;
             stdin.flush().await.map_err(|e| RpcError::Other(anyhow!("flush: {e}")))
         }
         .await;
@@ -232,7 +240,9 @@ impl Sidecar {
                     tracing::warn!(target: "sidecar", "process sidecar did not exit; killing");
                     let _ = child.kill().await;
                 }
-                Role::Capture => tracing::info!(target: "sidecar", "capture sidecar still finalising; leaving it to finish"),
+                Role::Capture => {
+                    tracing::info!(target: "sidecar", "capture sidecar still finalising; leaving it to finish")
+                }
             }
         }
     }

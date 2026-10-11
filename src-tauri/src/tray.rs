@@ -1,7 +1,7 @@
 //! Menu-bar item: start/stop recording, elapsed time, open the main window.
 
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
@@ -30,7 +30,11 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
                     let recorder = app.state::<Arc<Recorder>>().inner().clone();
-                    let result = if recorder.is_recording().await { recorder.stop(&app).await.map(|_| ()) } else { recorder.start(&app, None).await.map(|_| ()) };
+                    let result = if recorder.is_recording().await {
+                        recorder.stop(&app).await.map(|_| ())
+                    } else {
+                        recorder.start(&app, None).await.map(|_| ())
+                    };
                     if let Err(e) = result {
                         tracing::error!("tray toggle failed: {e:#}");
                     }
@@ -91,8 +95,8 @@ pub fn set_recording(app: &AppHandle, elapsed_ms: Option<u64>) {
         MenuItem::with_id(app, ITEM_OPEN, "Open Muesli", true, None::<&str>),
         MenuItem::with_id(app, ITEM_QUIT, "Quit Muesli", true, None::<&str>),
         PredefinedMenuItem::separator(app),
-    )
-        && let Ok(menu) = Menu::with_items(app, &[&toggle, &sep, &open, &quit]) {
-            let _ = tray.set_menu(Some(menu));
-        }
+    ) && let Ok(menu) = Menu::with_items(app, &[&toggle, &sep, &open, &quit])
+    {
+        let _ = tray.set_menu(Some(menu));
+    }
 }

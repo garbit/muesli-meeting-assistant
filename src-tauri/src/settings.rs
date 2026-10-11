@@ -5,8 +5,8 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::db::{now_iso, Db};
 use crate::AppState;
+use crate::db::{Db, now_iso};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -136,7 +136,8 @@ pub fn recording_delete(state: State<'_, AppState>, meeting_id: String) -> CmdRe
         .db
         .with(|c| {
             let mut stmt = c.prepare("SELECT id, path FROM recordings WHERE meeting_id = ?1 AND deleted_at IS NULL")?;
-            let rows: Vec<(String, String)> = stmt.query_map([&meeting_id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+            let rows: Vec<(String, String)> =
+                stmt.query_map([&meeting_id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
             for (id, path) in rows {
                 if let Some(dir) = std::path::Path::new(&path).parent() {
                     let _ = std::fs::remove_file(dir.join("mix16k.wav"));

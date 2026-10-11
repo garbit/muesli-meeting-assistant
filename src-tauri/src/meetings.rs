@@ -2,12 +2,12 @@
 //! expose them. Transcript/summary rows are written by the job pipeline.
 
 use anyhow::Result;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::db::{new_id, now_iso};
 use crate::AppState;
+use crate::db::{new_id, now_iso};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -119,7 +119,8 @@ pub fn insert_meeting(c: &Connection, title: &str, source: &str) -> Result<Meeti
 }
 
 pub fn get_meeting(c: &Connection, id: &str) -> Result<Option<Meeting>> {
-    Ok(c.query_row(&format!("SELECT {MEETING_COLUMNS} FROM meetings m WHERE m.id = ?1"), [id], row_to_meeting).optional()?)
+    Ok(c.query_row(&format!("SELECT {MEETING_COLUMNS} FROM meetings m WHERE m.id = ?1"), [id], row_to_meeting)
+        .optional()?)
 }
 
 pub fn list_meetings(c: &Connection) -> Result<Vec<Meeting>> {
@@ -133,7 +134,13 @@ pub fn set_state(c: &Connection, id: &str, state: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn set_times(c: &Connection, id: &str, started: Option<&str>, ended: Option<&str>, duration_ms: Option<i64>) -> Result<()> {
+pub fn set_times(
+    c: &Connection,
+    id: &str,
+    started: Option<&str>,
+    ended: Option<&str>,
+    duration_ms: Option<i64>,
+) -> Result<()> {
     c.execute(
         "UPDATE meetings SET started_at = COALESCE(?2, started_at), ended_at = COALESCE(?3, ended_at), duration_ms = COALESCE(?4, duration_ms) WHERE id = ?1",
         params![id, started, ended, duration_ms],
@@ -141,7 +148,15 @@ pub fn set_times(c: &Connection, id: &str, started: Option<&str>, ended: Option<
     Ok(())
 }
 
-pub fn insert_recording(c: &Connection, meeting_id: &str, kind: &str, path: &str, sample_rate: Option<i64>, channels: Option<i64>, duration_ms: Option<i64>) -> Result<String> {
+pub fn insert_recording(
+    c: &Connection,
+    meeting_id: &str,
+    kind: &str,
+    path: &str,
+    sample_rate: Option<i64>,
+    channels: Option<i64>,
+    duration_ms: Option<i64>,
+) -> Result<String> {
     let id = new_id();
     let bytes = std::fs::metadata(path).map(|m| m.len() as i64).ok();
     c.execute(
@@ -188,14 +203,27 @@ pub fn detail(c: &Connection, id: &str) -> Result<Option<MeetingDetail>> {
     let mut speakers = Vec::new();
     let mut stmt = c.prepare("SELECT diar_label, speaker_id, display_name, mic_ratio, speech_ms FROM meeting_speakers WHERE meeting_id = ?1 ORDER BY speech_ms DESC")?;
     for row in stmt.query_map([id], |r| {
-        Ok(MeetingSpeaker { diar_label: r.get(0)?, speaker_id: r.get(1)?, display_name: r.get(2)?, mic_ratio: r.get(3)?, speech_ms: r.get(4)? })
+        Ok(MeetingSpeaker {
+            diar_label: r.get(0)?,
+            speaker_id: r.get(1)?,
+            display_name: r.get(2)?,
+            mic_ratio: r.get(3)?,
+            speech_ms: r.get(4)?,
+        })
     })? {
         speakers.push(row?);
     }
     let mut summaries = Vec::new();
     let mut stmt = c.prepare("SELECT id, template_id, model_id, body_md, status, created_at FROM summaries WHERE meeting_id = ?1 ORDER BY created_at DESC")?;
     for row in stmt.query_map([id], |r| {
-        Ok(Summary { id: r.get(0)?, template_id: r.get(1)?, model_id: r.get(2)?, body_md: r.get(3)?, status: r.get(4)?, created_at: r.get(5)? })
+        Ok(Summary {
+            id: r.get(0)?,
+            template_id: r.get(1)?,
+            model_id: r.get(2)?,
+            body_md: r.get(3)?,
+            status: r.get(4)?,
+            created_at: r.get(5)?,
+        })
     })? {
         summaries.push(row?);
     }
@@ -233,7 +261,12 @@ pub fn meeting_get(state: State<'_, AppState>, id: String) -> CmdResult<Option<M
 }
 
 #[tauri::command]
-pub fn meeting_update(state: State<'_, AppState>, id: String, title: Option<String>, notes_md: Option<String>) -> CmdResult<()> {
+pub fn meeting_update(
+    state: State<'_, AppState>,
+    id: String,
+    title: Option<String>,
+    notes_md: Option<String>,
+) -> CmdResult<()> {
     state
         .db
         .with(|c| {
@@ -261,7 +294,12 @@ pub fn meeting_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub fn meeting_rename_speaker(state: State<'_, AppState>, meeting_id: String, diar_label: String, name: String) -> CmdResult<()> {
+pub fn meeting_rename_speaker(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    diar_label: String,
+    name: String,
+) -> CmdResult<()> {
     state
         .db
         .with(|c| {

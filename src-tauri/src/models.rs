@@ -5,13 +5,13 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
-use crate::paths::{file_size, Paths};
+use crate::paths::{Paths, file_size};
 
 pub const MANIFEST_JSON: &str = include_str!("../models.manifest.json");
 
@@ -142,13 +142,8 @@ pub async fn download_gguf(
     let content_len = resp.content_length().unwrap_or(0);
     let total = if resumed { existing + content_len } else { content_len };
 
-    let mut out = tokio::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(resumed)
-        .truncate(!resumed)
-        .open(&part)
-        .await?;
+    let mut out =
+        tokio::fs::OpenOptions::new().create(true).write(true).append(resumed).truncate(!resumed).open(&part).await?;
     let mut done = if resumed { existing } else { 0 };
     let mut stream = resp.bytes_stream();
     let mut last_report = 0u64;

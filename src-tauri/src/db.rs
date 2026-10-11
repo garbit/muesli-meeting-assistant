@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
-use rusqlite_migration::{Migrations, M};
+use rusqlite_migration::{M, Migrations};
 
 pub struct Db {
     conn: Mutex<Connection>,

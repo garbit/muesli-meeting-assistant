@@ -2,12 +2,12 @@
 //! edited in-app. A template body is Markdown with `{{variables}}`.
 
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::db::{new_id, now_iso};
 use crate::AppState;
+use crate::db::{new_id, now_iso};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,7 +67,14 @@ pub fn seed_builtins(c: &Connection) -> Result<()> {
 pub fn list(c: &Connection) -> Result<Vec<Template>> {
     let mut stmt = c.prepare("SELECT id, name, body_md, is_builtin, sort_order, updated_at FROM templates ORDER BY is_builtin DESC, sort_order, name")?;
     let rows = stmt.query_map([], |r| {
-        Ok(Template { id: r.get(0)?, name: r.get(1)?, body_md: r.get(2)?, is_builtin: r.get::<_, i64>(3)? != 0, sort_order: r.get(4)?, updated_at: r.get(5)? })
+        Ok(Template {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            body_md: r.get(2)?,
+            is_builtin: r.get::<_, i64>(3)? != 0,
+            sort_order: r.get(4)?,
+            updated_at: r.get(5)?,
+        })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
@@ -95,7 +102,12 @@ pub fn templates_list(state: State<'_, AppState>) -> CmdResult<Vec<Template>> {
 }
 
 #[tauri::command]
-pub fn template_upsert(state: State<'_, AppState>, id: Option<String>, name: String, body_md: String) -> CmdResult<Template> {
+pub fn template_upsert(
+    state: State<'_, AppState>,
+    id: Option<String>,
+    name: String,
+    body_md: String,
+) -> CmdResult<Template> {
     let id = id.unwrap_or_else(new_id);
     state
         .db
@@ -130,7 +142,10 @@ pub fn template_reset(state: State<'_, AppState>, id: String) -> CmdResult<Templ
     state
         .db
         .with(|c| {
-            c.execute("UPDATE templates SET name = ?2, body_md = ?3, updated_at = ?4 WHERE id = ?1", params![id, name, body, now_iso()])?;
+            c.execute(
+                "UPDATE templates SET name = ?2, body_md = ?3, updated_at = ?4 WHERE id = ?1",
+                params![id, name, body, now_iso()],
+            )?;
             get(c, &id)?.ok_or_else(|| anyhow::anyhow!("template vanished"))
         })
         .map_err(|e| e.to_string())

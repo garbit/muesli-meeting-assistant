@@ -14,17 +14,59 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{LlamaChatMessage, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
-use llama_cpp_2::{send_logs_to_tracing, LogOptions};
+use llama_cpp_2::{LogOptions, send_logs_to_tracing};
 
 const SYSTEM: &str = "You are a meeting assistant. Summarise the transcript into these Markdown sections, in order: ## TL;DR, ## Main points by speaker, ## Actions and takeaways. Be concrete and brief.";
 
 fn synthetic_transcript(model: &LlamaModel, target_tokens: usize) -> String {
     // Deterministic pseudo-random meeting so the model cannot simply loop.
     let speakers = ["Alice", "Bob", "Chen", "Dana"];
-    let subjects = ["the launch", "the payments integration", "the onboarding flow", "the pricing page", "the migration script", "the incident report", "hiring for the platform team", "the Q4 roadmap", "the customer webinar", "the data retention policy", "the mobile beta", "the vendor contract"];
-    let verbs = ["is blocked on", "should wait for", "needs sign-off from", "was delayed by", "depends on", "can be unblocked by", "is at risk because of", "was finished ahead of"];
-    let objects = ["finance", "the security review", "the design team", "legal", "the new API keys", "customer feedback", "the load test results", "the board update", "the contractor onboarding", "the analytics dashboard"];
-    let tails = ["so I will follow up tomorrow.", "and we agreed to revisit it on Friday.", "which means the date moves by a week.", "but nobody owns it yet.", "and Dana will write it up.", "so let's decide now.", "and that is a hard deadline.", "unless QA finds something."];
+    let subjects = [
+        "the launch",
+        "the payments integration",
+        "the onboarding flow",
+        "the pricing page",
+        "the migration script",
+        "the incident report",
+        "hiring for the platform team",
+        "the Q4 roadmap",
+        "the customer webinar",
+        "the data retention policy",
+        "the mobile beta",
+        "the vendor contract",
+    ];
+    let verbs = [
+        "is blocked on",
+        "should wait for",
+        "needs sign-off from",
+        "was delayed by",
+        "depends on",
+        "can be unblocked by",
+        "is at risk because of",
+        "was finished ahead of",
+    ];
+    let objects = [
+        "finance",
+        "the security review",
+        "the design team",
+        "legal",
+        "the new API keys",
+        "customer feedback",
+        "the load test results",
+        "the board update",
+        "the contractor onboarding",
+        "the analytics dashboard",
+    ];
+    let tails = [
+        "so I will follow up tomorrow.",
+        "and we agreed to revisit it on Friday.",
+        "which means the date moves by a week.",
+        "but nobody owns it yet.",
+        "and Dana will write it up.",
+        "so let's decide now.",
+        "and that is a hard deadline.",
+        "unless QA finds something.",
+    ];
     let mut out = String::new();
     let mut t = 0u32;
     let mut i = 0usize;
@@ -100,10 +142,8 @@ fn main() -> Result<()> {
 
     let transcript = synthetic_transcript(&model, prompt_tokens);
     let user = format!("Meeting transcript (90 minutes, 4 participants):\n\n{transcript}\n\nWrite the summary now.");
-    let msgs = [
-        LlamaChatMessage::new("system".into(), SYSTEM.into())?,
-        LlamaChatMessage::new("user".into(), user.clone())?,
-    ];
+    let msgs =
+        [LlamaChatMessage::new("system".into(), SYSTEM.into())?, LlamaChatMessage::new("user".into(), user.clone())?];
     // llama.cpp's built-in template matcher does not know Gemma 4's Jinja template
     // (apply_chat_template returns -1), so print the template for reference and
     // fall back to the Gemma turn format. The real engine renders the Jinja

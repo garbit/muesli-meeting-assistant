@@ -4,7 +4,7 @@
 //! fall back to a hand-written Gemma 4 layout.
 
 use anyhow::{Context, Result};
-use minijinja::{context, Environment};
+use minijinja::{Environment, context};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -66,12 +66,13 @@ pub fn render_gemma4(messages: &[ChatMessage], bos: &str) -> String {
     let mut out = String::from(bos);
     let mut iter = messages.iter().peekable();
     if let Some(first) = iter.peek()
-        && first.role == "system" {
-            out.push_str("<|turn>system\n");
-            out.push_str(first.content.trim());
-            out.push_str("<turn|>\n");
-            iter.next();
-        }
+        && first.role == "system"
+    {
+        out.push_str("<|turn>system\n");
+        out.push_str(first.content.trim());
+        out.push_str("<turn|>\n");
+        iter.next();
+    }
     for m in iter {
         let role = if m.role == "assistant" { "model" } else { m.role.as_str() };
         out.push_str(&format!("<|turn>{role}\n{}<turn|>\n", m.content.trim()));
@@ -87,7 +88,10 @@ mod tests {
     #[test]
     fn gemma4_fallback_layout() {
         let p = render_gemma4(&[ChatMessage::system("S"), ChatMessage::user("U")], "<bos>");
-        assert_eq!(p, "<bos><|turn>system\nS<turn|>\n<|turn>user\nU<turn|>\n<|turn>model\n<|channel>thought\n<channel|>");
+        assert_eq!(
+            p,
+            "<bos><|turn>system\nS<turn|>\n<|turn>user\nU<turn|>\n<|turn>model\n<|channel>thought\n<channel|>"
+        );
     }
 
     #[test]

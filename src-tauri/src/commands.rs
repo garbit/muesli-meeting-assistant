@@ -2,12 +2,12 @@
 //! `Result<T, String>` so errors render as strings in the UI.
 
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, State};
 
+use crate::AppState;
 use crate::models::{self, ModelStatus};
 use crate::sidecar::{Role, Sidecar};
-use crate::AppState;
 
 type CmdResult<T> = Result<T, String>;
 
@@ -51,16 +51,17 @@ pub async fn models_status(state: State<'_, AppState>) -> CmdResult<Vec<ModelSta
     match Sidecar::spawn(Role::Process, &state.paths.fluid_models()).await {
         Ok(sc) => {
             if let Ok(v) = sc.call("models.status", json!({})).await
-                && let Some(arr) = v.as_array() {
-                    for item in arr {
-                        out.push(ModelStatus {
-                            id: item["id"].as_str().unwrap_or("").to_string(),
-                            installed: item["installed"].as_bool().unwrap_or(false),
-                            bytes_on_disk: item["bytes"].as_u64().unwrap_or(0),
-                            path: item["path"].as_str().map(str::to_string),
-                        });
-                    }
+                && let Some(arr) = v.as_array()
+            {
+                for item in arr {
+                    out.push(ModelStatus {
+                        id: item["id"].as_str().unwrap_or("").to_string(),
+                        installed: item["installed"].as_bool().unwrap_or(false),
+                        bytes_on_disk: item["bytes"].as_u64().unwrap_or(0),
+                        path: item["path"].as_str().map(str::to_string),
+                    });
                 }
+            }
             sc.shutdown().await;
         }
         Err(e) => tracing::warn!("sidecar unavailable for models.status: {e}"),
