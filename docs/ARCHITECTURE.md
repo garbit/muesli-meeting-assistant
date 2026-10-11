@@ -172,6 +172,26 @@ Implications:
 * The capture process must be launched by something that holds the Microphone
   and System Audio Recording permissions; when launched from a terminal, the
   terminal is the responsible process.
+* Permissions (`src-tauri/src/permissions.rs`): the microphone status comes
+  from `AVCaptureDevice.authorizationStatus` through the capture sidecar and
+  never prompts. System Audio Recording has no public query, and a denied tap
+  does not fail but delivers zeros, so its status is learnt once per build by
+  `permissions.systemAudioProbe` (`SystemAudioProbe.swift`): the sidecar builds
+  the same kind of tap and aggregate as a recording, plays a −80 dBFS tone
+  itself and reports whether any non-zero sample reached the tap; the Rust side
+  classifies the facts and stores the verdict with the build's code hash (main
+  executable plus sidecar, since the ad-hoc signature covers the whole bundle).
+  At startup the app re-reads the microphone and, once a build has a verdict,
+  exercises the tap again (macOS applies a revoked System Audio grant only after
+  the app quits, so the next launch is the first chance to notice; a build with
+  no verdict is left to the setup card so no prompt appears without context).
+  It pushes every change as `permissions:changed` (one shared store on the
+  frontend), runs the prompts automatically on the first launch of a build that
+  is not ready, re-checks both grants when the window regains focus (debounced),
+  and corrects the system-audio verdict from what a real recording's tap
+  delivers. Measured on macOS 26.5: a permitted tap hears the tone on the first
+  attempt (~1.2 s); a refused tap is created normally and fires IO but delivers
+  exact zeros.
 * ggml's Metal backend asserts (`[rsets->data count] == 0`) during C++ static
   destruction if a model is still loaded at `exit()`. The engine is unloaded on
   Tauri's `RunEvent::Exit` and before the headless mode returns.

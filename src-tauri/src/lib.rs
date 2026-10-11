@@ -113,7 +113,7 @@ pub fn run() {
             settings::recording_delete,
             permissions::permissions_status,
             permissions::permissions_request,
-            permissions::permissions_acknowledge,
+            permissions::permissions_recheck,
             permissions::permissions_open_settings,
             diagnostics::diagnostics_report,
             diagnostics::meeting_jobs,
@@ -133,15 +133,25 @@ pub fn run() {
                 recording::recover_interrupted(&handle).await;
                 recording::resume_unprocessed(&handle);
             });
+            // Establish the permission state once and push it to the UI.
+            tauri::async_runtime::spawn(permissions::probe_at_startup(app.handle().clone()));
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Closing the main window keeps the app (and any recording) alive in the menu bar.
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event
-                && window.label() == "main"
-            {
-                api.prevent_close();
-                let _ = window.hide();
+            if window.label() != "main" {
+                return;
+            }
+            match event {
+                // Closing the main window keeps the app (and any recording) alive in the menu bar.
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                // Back from System Settings, most likely: re-check what is still missing.
+                tauri::WindowEvent::Focused(true) => {
+                    tauri::async_runtime::spawn(permissions::refresh_on_focus(window.app_handle().clone()));
+                }
+                _ => {}
             }
         })
         .build(tauri::generate_context!())

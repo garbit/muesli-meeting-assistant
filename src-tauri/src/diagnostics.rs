@@ -158,6 +158,7 @@ pub async fn report(state: &AppState) -> String {
             let _ = writeln!(out, "settings: error {e}");
         }
     }
+    let _ = writeln!(out, "permissions: {}", crate::permissions::diagnostics_summary(state).await);
 
     let _ = writeln!(out, "\n## Models");
     for m in state.manifest.models.iter().filter(|m| m.runtime == "llama.cpp") {
@@ -278,6 +279,9 @@ pub fn doctor() -> i32 {
     match result {
         Ok(r) => {
             println!("{r}");
+            println!(
+                "note: the permissions line reflects the process that launched this command; from a terminal that is the terminal's grant, not the app's."
+            );
             0
         }
         Err(e) => {
