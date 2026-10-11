@@ -1,0 +1,21 @@
+[package]
+name = "muesli-llm"
+description = "llama.cpp (Metal) wrapper used by Muesli for local summarisation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+minijinja = { version = "3", features = ["loop_controls", "macros", "multi_template", "builtins", "json", "adjacent_loop_items", "serde"] }
+minijinja-contrib = { version = "3", features = ["pycompat"] }
+llama-cpp-2.workspace = true
+llama-cpp-sys-2 = "0.1.159"
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "notes": "Curated allow-list. Only US/EU-origin weights and runtimes. The app refuses to load anything not listed here. GGUF sha256 values are the LFS object ids published by Hugging Face (2026-10-11).",
+  "models": [
+    {
+      "id": "parakeet-tdt-0.6b-v3",
+      "kind": "asr",
+      "name": "Parakeet TDT 0.6B v3",
+      "organisation": "NVIDIA (US); CoreML port by FluidInference",
+      "licence": "CC-BY-4.0",
+      "repo": "FluidInference/parakeet-tdt-0.6b-v3-coreml",
+      "runtime": "sidecar",
+      "approxBytes": 700000000,
+      "minRamGb": 8,
+      "minMacos": "14.4"
+    },
+    {
+      "id": "pyannote-community-1",
+      "kind": "diarisation",
+      "name": "pyannote speaker-diarization-community-1",
+      "organisation": "pyannote (FR); CoreML port by FluidInference",
+      "licence": "CC-BY-4.0",
+      "repo": "FluidInference/speaker-diarization-coreml",
+      "runtime": "sidecar",
+      "approxBytes": 40000000,
+      "minRamGb": 8,
+      "minMacos": "14.4",
+      "provenance": "Community-1 artifact set only. Segmentation and embedding weights trained by pyannote; the embedding architecture is credited to WeSpeaker. Legacy wespeaker bundles are never downloaded."
+    },
+    {
+      "id": "gemma-4-12b-it-q4_0",
+      "kind": "llm",
+      "name": "Gemma 4 12B (Q4_0)",
+      "organisation": "Google (US)",
+      "licence": "Apache-2.0",
+      "repo": "ggml-org/gemma-4-12B-it-GGUF",
+      "files": [
+        {
+          "path": "gemma-4-12B-it-Q4_0.gguf",
+          "sha256": "3712b9bd32cae83a22f67ee7a4466d8d7a4f21646ac8a07d19bf9418e8767a70",
+          "bytes": 7219673216
+        }
+      ],
+      "runtime": "llama.cpp",
+      "approxBytes": 7219673216,
+      "minRamGb": 16,
+      "contextTokens": 16384,
+      "preset": "fast"
+    },
+    {
+      "id": "gemma-4-26b-a4b-it-q4_0",
+      "kind": "llm",
+      "name": "Gemma 4 26B-A4B (Q4_0)",
+      "organisation": "Google (US)",
+      "licence": "Apache-2.0",
+      "repo": "ggml-org/gemma-4-26B-A4B-it-GGUF",
+      "files": [
+        {
+          "path": "gemma-4-26B-A4B-it-Q4_0.gguf",
+          "sha256": "d208665ab1cd3a69f7a9a4bc59430e8448c8093d9b06334f566ac59d6d504a03",
+          "bytes": 14618145824
+        }
+      ],
+      "runtime": "llama.cpp",
+      "approxBytes": 14618145824,
+      "minRamGb": 24,
+      "contextTokens": 32768,
+      "preset": "balanced",
+      "default": true
+    },
+    {
+      "id": "gemma-4-31b-it-q4_0",
+      "kind": "llm",
+      "name": "Gemma 4 31B (Q4_0) \u2014 slow",
+      "organisation": "Google (US)",
+      "licence": "Apache-2.0",
+      "repo": "ggml-org/gemma-4-31B-it-GGUF",
+      "files": [
+        {
+          "path": "gemma-4-31B-it-Q4_0.gguf",
+          "sha256": "031dc1c5fa9c5a0abbf3c39c5173fb2af65f5ac2dc2a090268561d3c72dcd834",
+          "bytes": 17992313088
+        }
+      ],
+      "runtime": "llama.cpp",
+      "approxBytes": 17992313088,
+      "minRamGb": 32,
+      "contextTokens": 32768,
+      "optional": true
+    },
+    {
+      "id": "gpt-oss-20b-mxfp4",
+      "kind": "llm",
+      "name": "gpt-oss-20b (MXFP4)",
+      "organisation": "OpenAI (US)",
+      "licence": "Apache-2.0",
+      "repo": "ggml-org/gpt-oss-20b-GGUF",
+      "files": [
+        {
+          "path": "gpt-oss-20b-MXFP4.gguf",
+          "sha256": "27cd6c432c7672cb812a92f611cf3ba7bbc35928262bb1e1253ff4ee6ae35901",
+          "bytes": 12109566624
+        }
+      ],
+      "runtime": "llama.cpp",
+      "approxBytes": 12109566624,
+      "minRamGb": 16,
+      "contextTokens": 32768,
+      "optional": true
+    }
+  ],
+  "presets": {
+    "fast": {
+      "asr": "parakeet-tdt-0.6b-v3",
+      "diarisation": "pyannote-community-1",
+      "llm": "gemma-4-12b-it-q4_0",
+      "minRamGb": 16
+    },
+    "balanced": {
+      "asr": "parakeet-tdt-0.6b-v3",
+      "diarisation": "pyannote-community-1",
+      "llm": "gemma-4-26b-a4b-it-q4_0",
+      "minRamGb": 24
+    }
+  }
+}

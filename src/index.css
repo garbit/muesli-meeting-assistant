@@ -1,0 +1,17 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+:root {
+  color-scheme: light dark;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  @apply bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100;
+}
