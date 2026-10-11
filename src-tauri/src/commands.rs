@@ -103,7 +103,16 @@ pub async fn models_download(app: AppHandle, state: State<'_, AppState>, id: Str
                 .await
                 .map_err(err)?;
             }
-            Ok(models::gguf_status(&state.paths, &entry))
+            let status = models::gguf_status(&state.paths, &entry);
+            // A freshly installed embedding model: vectorise everything that was indexed without one.
+            if entry.kind == "embedding" && status.installed {
+                let target = crate::search::resolve_embedder(&state.paths, &state.manifest).map(|(id, _)| id);
+                match state.search.indexer.request_stale(&state.db, target.as_deref()) {
+                    Ok(n) => tracing::info!("embedding model installed; {n} meeting(s) queued for vectors"),
+                    Err(e) => tracing::warn!("queueing meetings for vectors failed: {e:#}"),
+                }
+            }
+            Ok(status)
         }
         "sidecar" => {
             let sc = Sidecar::spawn(Role::Process, &state.paths.fluid_models()).await.map_err(err)?;

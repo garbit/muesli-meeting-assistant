@@ -198,6 +198,26 @@ pub async fn report(state: &AppState) -> String {
         }
     }
 
+    let _ = writeln!(out, "\n## Search index");
+    let target = crate::search::resolve_embedder(&state.paths, &state.manifest).map(|(id, _)| id);
+    match state.search.indexer.status(&state.db, target.as_deref()) {
+        Ok(s) => {
+            let _ = writeln!(
+                out,
+                "indexed={} pending={} failed={} total={} queued={} model={}",
+                s.indexed,
+                s.pending,
+                s.failed,
+                s.total,
+                s.queued,
+                s.model_id.as_deref().unwrap_or("none")
+            );
+        }
+        Err(e) => {
+            let _ = writeln!(out, "status failed: {e}");
+        }
+    }
+
     let _ = writeln!(out, "\n## Meetings");
     if let Ok(rows) = state.db.with(|c| {
         let mut stmt = c.prepare(
@@ -273,7 +293,7 @@ pub fn doctor() -> i32 {
         let paths = Paths::resolve()?;
         let db = std::sync::Arc::new(crate::db::Db::open(&paths.db())?);
         let manifest = models::Manifest::embedded()?;
-        let state = AppState { paths, db, manifest };
+        let state = AppState { paths, db, manifest, search: std::sync::Arc::new(crate::search::SearchState::new()) };
         Ok(report(&state).await)
     });
     match result {

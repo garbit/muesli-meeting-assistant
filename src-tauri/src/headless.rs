@@ -43,17 +43,34 @@ pub fn import_and_process(path: &str) -> i32 {
             }
         }
     });
-    // Release Metal buffers before exit; ggml asserts if a model is still resident.
-    let _ = muesli_llm::Engine::global().unload();
+    unload_models();
     code
 }
 
-async fn run(path: &str) -> anyhow::Result<()> {
+/// Release Metal buffers before exit; ggml asserts if a model is still resident.
+fn unload_models() {
+    let _ = muesli_llm::Engine::global().unload();
+    let _ = muesli_llm::Embedder::global().unload();
+}
+
+fn init_logging() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with_writer(std::io::stderr)
+        .try_init();
+}
+
+/// The library at `MUESLI_HOME` (or the real one), as the app would open it.
+fn open_state() -> anyhow::Result<AppState> {
     let paths = Paths::resolve()?;
     let db = Arc::new(Db::open(&paths.db())?);
     let manifest = Manifest::embedded()?;
     db.with(crate::templates::seed_builtins)?;
-    let state = AppState { paths, db, manifest };
+    Ok(AppState { paths, db, manifest, search: Arc::new(crate::search::SearchState::new()) })
+}
+
+async fn run(path: &str) -> anyhow::Result<()> {
+    let state = open_state()?;
 
     let src = std::path::PathBuf::from(path);
     anyhow::ensure!(src.is_file(), "not a file: {path}");
@@ -124,6 +141,182 @@ async fn run(path: &str) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// `muesli --search "<words>" [--speaker <name>]... [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--limit N]`
+/// against the real library (not the scratch one: it queries what the app indexed).
+pub fn search_cli(args: &[String]) -> i32 {
+    use crate::search::query::SearchRequest;
+    init_logging();
+    let mut req = SearchRequest::default();
+    let mut i = 0;
+    while i < args.len() {
+        let next = args.get(i + 1).cloned();
+        match (args[i].as_str(), next) {
+            ("--speaker", Some(v)) => {
+                req.speaker_ids.push(v);
+                i += 2;
+            }
+            ("--since", Some(v)) => {
+                req.date_from = Some(v);
+                i += 2;
+            }
+            ("--until", Some(v)) => {
+                req.date_to = Some(v);
+                i += 2;
+            }
+            ("--limit", Some(v)) => {
+                req.limit = v.parse().unwrap_or(20);
+                i += 2;
+            }
+            (word, _) => {
+                if !req.query.is_empty() {
+                    req.query.push(' ');
+                }
+                req.query.push_str(word);
+                i += 1;
+            }
+        }
+    }
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let code = rt.block_on(async {
+        let r: anyhow::Result<()> = async {
+            let state = open_state()?;
+            let ctx = crate::search::index::IndexCtx::from_state(&state);
+            let t0 = std::time::Instant::now();
+            let resp = crate::search::query::search(&ctx, &state.search.indexer, &req)?;
+            println!(
+                "{} of {} meeting(s) match ({} candidates, semantic={}, {:.0} ms); index: {} indexed, {} pending, {} failed{}",
+                resp.hits.len(),
+                resp.total_hits,
+                resp.candidates,
+                resp.semantic,
+                t0.elapsed().as_secs_f32() * 1000.0,
+                resp.index.indexed,
+                resp.index.pending,
+                resp.index.failed,
+                resp.index.model_id.as_deref().map(|m| format!(", model {m}")).unwrap_or_default()
+            );
+            for h in &resp.hits {
+                let date: String = h.meeting.started_at.clone().unwrap_or(h.meeting.created_at.clone()).chars().take(10).collect();
+                let who = h.speakers.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ");
+                println!("\n{:.3}  {}  ({date}, {} speakers: {who})  [{}]", h.score, h.meeting.title, h.speaker_count, h.meeting.id);
+                for s in &h.snippets {
+                    let at = match (s.start_ms, &s.section) {
+                        (Some(ms), _) => format!("{:02}:{:02}", ms / 60_000, (ms / 1000) % 60),
+                        (None, Some(sec)) => format!("## {sec}"),
+                        _ => String::new(),
+                    };
+                    let text = s.text.replace('\n', " ");
+                    println!("    [{} {at} {}] {}", s.kind, s.speaker.clone().unwrap_or_default(), text.trim());
+                }
+            }
+            Ok(())
+        }
+        .await;
+        match r {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                1
+            }
+        }
+    });
+    unload_models();
+    code
+}
+
+/// `muesli --reindex`: rebuild stale entries of the real library's search index, synchronously.
+pub fn reindex_cli() -> i32 {
+    init_logging();
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let code = rt.block_on(async {
+        let r: anyhow::Result<()> = async {
+            let state = open_state()?;
+            let ctx = crate::search::index::IndexCtx::from_state(&state);
+            let target = crate::search::resolve_embedder(&state.paths, &state.manifest).map(|(id, _)| id);
+            let n = state.search.indexer.request_stale(&state.db, target.as_deref())?;
+            println!("{n} meeting(s) to index (embedding model: {})", target.as_deref().unwrap_or("none installed"));
+            let t0 = std::time::Instant::now();
+            let mut i = 0;
+            while let Some(id) = state.search.indexer.pop() {
+                i += 1;
+                match crate::search::index::reconcile(&ctx, &id) {
+                    Ok(outcome) => println!("[{i}/{n}] {id}: {outcome:?}"),
+                    Err(e) => println!("[{i}/{n}] {id}: FAILED {e:#}"),
+                }
+            }
+            let st = state.search.indexer.status(&state.db, target.as_deref())?;
+            println!(
+                "done in {:.1}s: {} indexed, {} pending, {} failed of {}",
+                t0.elapsed().as_secs_f32(),
+                st.indexed,
+                st.pending,
+                st.failed,
+                st.total
+            );
+            Ok(())
+        }
+        .await;
+        match r {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                1
+            }
+        }
+    });
+    unload_models();
+    code
+}
+
+/// `muesli --ask "<question>"`: answer from the real library with citations, streamed to stdout.
+pub fn ask_cli(question: &str) -> i32 {
+    init_logging();
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let code = rt.block_on(async {
+        let r: anyhow::Result<()> = async {
+            let state = open_state()?;
+            let preset: String = state.db.get_setting("preset")?.unwrap_or_else(|| "balanced".to_string());
+            let (_, model_path, n_ctx) = crate::summarise::resolve_llm(&state.paths, &state.manifest, &preset)?;
+            let ctx = crate::search::index::IndexCtx::from_state(&state);
+            let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let emit = crate::ask::stdout_emitter();
+            println!("--- answer ---");
+            let (_answer, cites) = tokio::task::spawn_blocking({
+                let (ctx, q) = (ctx.clone(), question.to_string());
+                move || {
+                    crate::ask::answer_blocking(&emit, &ctx, "cli", &q, &Default::default(), &model_path, n_ctx, cancel)
+                }
+            })
+            .await??;
+            println!("\n--- {} citation(s) ---", cites.len());
+            for c in &cites {
+                println!(
+                    "[{}] {} ({}) {}{}",
+                    c.n,
+                    c.title,
+                    c.date,
+                    c.speaker.clone().map(|s| format!("{s} ")).unwrap_or_default(),
+                    c.start_ms
+                        .map(|ms| format!("at {:02}:{:02}", ms / 60_000, (ms / 1000) % 60))
+                        .or(c.section.clone().map(|s| format!("## {s}")))
+                        .unwrap_or_default()
+                );
+            }
+            Ok(())
+        }
+        .await;
+        match r {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                1
+            }
+        }
+    });
+    unload_models();
+    code
 }
 
 /// Record for `seconds` into `dir` using the capture sidecar; writes

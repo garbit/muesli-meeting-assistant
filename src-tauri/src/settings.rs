@@ -23,6 +23,9 @@ pub struct Settings {
     /// Show a near-real-time transcript while recording.
     #[serde(default = "default_true")]
     pub live_transcript: bool,
+    /// Extract topics, people and decisions from each new summary (runs the LLM once more).
+    #[serde(default = "default_true")]
+    pub extract_facets: bool,
 }
 
 fn default_true() -> bool {
@@ -38,6 +41,7 @@ impl Default for Settings {
             auto_transcribe: true,
             auto_summarise: true,
             live_transcript: true,
+            extract_facets: true,
         }
     }
 }
@@ -62,6 +66,9 @@ pub fn load(db: &Db) -> Result<Settings> {
     if let Some(l) = db.get_setting::<bool>("live_transcript")? {
         s.live_transcript = l;
     }
+    if let Some(f) = db.get_setting::<bool>("extract_facets")? {
+        s.extract_facets = f;
+    }
     Ok(s)
 }
 
@@ -72,6 +79,7 @@ pub fn save(db: &Db, s: &Settings) -> Result<()> {
     db.set_setting("auto_summarise", &s.auto_summarise)?;
     db.set_setting("auto_transcribe", &s.auto_transcribe)?;
     db.set_setting("live_transcript", &s.live_transcript)?;
+    db.set_setting("extract_facets", &s.extract_facets)?;
     Ok(())
 }
 

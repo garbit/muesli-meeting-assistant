@@ -27,7 +27,7 @@ pub struct Meeting {
 }
 
 /// Columns for `row_to_meeting`, including the derived `last_error`.
-const MEETING_COLUMNS: &str = "m.id, m.title, m.source, m.created_at, m.started_at, m.ended_at, m.duration_ms, m.notes_md, m.state,     (SELECT j.error FROM jobs j WHERE j.meeting_id = m.id AND j.state = 'failed' ORDER BY j.created_at DESC LIMIT 1) AS last_error";
+pub(crate) const MEETING_COLUMNS: &str = "m.id, m.title, m.source, m.created_at, m.started_at, m.ended_at, m.duration_ms, m.notes_md, m.state,     (SELECT j.error FROM jobs j WHERE j.meeting_id = m.id AND j.state = 'failed' ORDER BY j.created_at DESC LIMIT 1) AS last_error";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,7 +83,7 @@ pub struct MeetingDetail {
     pub summaries: Vec<Summary>,
 }
 
-fn row_to_meeting(r: &Row) -> rusqlite::Result<Meeting> {
+pub(crate) fn row_to_meeting(r: &Row) -> rusqlite::Result<Meeting> {
     Ok(Meeting {
         id: r.get("id")?,
         title: r.get("title")?,
@@ -276,7 +276,9 @@ pub fn meeting_update(
             )?;
             Ok(())
         })
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    state.search.indexer.request(&id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -289,6 +291,8 @@ pub fn meeting_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
             Ok(())
         })
         .map_err(|e| e.to_string())?;
+    // Rows cascade in the database; drop the in-memory vectors too.
+    state.search.vectors.remove_meeting(&id);
     let _ = std::fs::remove_dir_all(dir);
     Ok(())
 }
@@ -309,5 +313,7 @@ pub fn meeting_rename_speaker(
             )?;
             Ok(())
         })
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    state.search.indexer.request(&meeting_id);
+    Ok(())
 }

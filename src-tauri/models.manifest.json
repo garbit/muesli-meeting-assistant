@@ -107,6 +107,27 @@
       "minRamGb": 16,
       "contextTokens": 32768,
       "optional": true
+    },
+    {
+      "id": "embeddinggemma-300m-q8_0",
+      "kind": "embedding",
+      "name": "EmbeddingGemma 300M (Q8_0)",
+      "organisation": "Google (US)",
+      "licence": "Gemma Terms of Use",
+      "repo": "ggml-org/embeddinggemma-300M-GGUF",
+      "files": [
+        {
+          "path": "embeddinggemma-300M-Q8_0.gguf",
+          "sha256": "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63",
+          "bytes": 333590944
+        }
+      ],
+      "runtime": "llama.cpp",
+      "approxBytes": 333590944,
+      "minRamGb": 8,
+      "contextTokens": 2048,
+      "default": true,
+      "provenance": "Mean-pooled 768-d embeddings truncated to 256-d (Matryoshka); the GGUF includes the dense output layers. Weights under the Gemma Terms of Use (not Apache-2.0); see docs/MODEL-POLICY.md."
     }
   ],
   "presets": {

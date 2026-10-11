@@ -5,9 +5,11 @@
 //! capture and CoreML inference.
 
 pub mod align;
+pub mod ask;
 pub mod commands;
 pub mod db;
 pub mod diagnostics;
+pub mod facets;
 pub mod headless;
 pub mod jobs;
 pub mod meetings;
@@ -15,6 +17,7 @@ pub mod models;
 pub mod paths;
 pub mod permissions;
 pub mod recording;
+pub mod search;
 pub mod settings;
 pub mod sidecar;
 pub mod speakers;
@@ -39,6 +42,8 @@ pub struct AppState {
     pub paths: Paths,
     pub db: Arc<Db>,
     pub manifest: Manifest,
+    /// Search index and its queue; inert until `search::start` runs.
+    pub search: Arc<search::SearchState>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -71,7 +76,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(AppState { paths, db, manifest })
+        .manage(AppState { paths, db, manifest, search: Arc::new(search::SearchState::new()) })
         .manage(Arc::new(Recorder::default()))
         .manage(Arc::new(JobQueue::default()))
         .manage(Arc::new(SummaryJobs::default()))
@@ -120,6 +125,16 @@ pub fn run() {
             diagnostics::meeting_logs,
             diagnostics::open_logs_folder,
             diagnostics::open_data_folder,
+            search::search_meetings,
+            search::search_facets,
+            search::search_status,
+            search::search_reindex,
+            search::search_warm,
+            search::meeting_related,
+            facets::meeting_facets,
+            facets::facets_backfill,
+            ask::ask_meetings,
+            ask::ask_cancel,
         ])
         .setup(|app| {
             tray::setup(app.handle())?;
@@ -135,6 +150,8 @@ pub fn run() {
             });
             // Establish the permission state once and push it to the UI.
             tauri::async_runtime::spawn(permissions::probe_at_startup(app.handle().clone()));
+            // Background search indexer; picks up anything stale from the last run.
+            search::start(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -199,6 +216,7 @@ pub fn run() {
             tauri::RunEvent::Exit => {
                 // Release Metal buffers before exit; ggml asserts if a model is still resident.
                 let _ = muesli_llm::Engine::global().unload();
+                let _ = muesli_llm::Embedder::global().unload();
             }
             _ => {}
         });

@@ -1,10 +1,14 @@
 //! llama.cpp (Metal) engine for Muesli.
 //!
-//! llama.cpp objects are not `Send`, so everything lives on one dedicated OS
-//! thread that owns the backend, the loaded model and, per request, a context.
-//! Callers talk to it through [`Engine`], a cheap cloneable handle.
+//! llama.cpp objects are not `Send`, so everything lives on dedicated OS
+//! threads: `muesli-llm` owns the chat model and, per request, a context
+//! ([`Engine`]); `muesli-embed` owns the embedding model with one persistent
+//! context ([`Embedder`]). Both share the process-wide backend.
 
+pub mod embed;
 pub mod template;
+
+pub use embed::{EMBED_DIM, EmbedInfo, Embedder};
 
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -96,6 +100,26 @@ pub struct Engine {
 }
 
 static ENGINE: OnceLock<Engine> = OnceLock::new();
+static BACKEND: OnceLock<Option<LlamaBackend>> = OnceLock::new();
+
+/// The one llama.cpp backend per process, shared by the LLM and embedding
+/// threads. `LlamaBackend::init` may run once; the static is never dropped.
+pub(crate) fn backend() -> Result<&'static LlamaBackend> {
+    BACKEND
+        .get_or_init(|| {
+            // Not re-entrant: must run exactly once per process.
+            send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
+            match LlamaBackend::init() {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    tracing::error!("llama backend init failed: {e}");
+                    None
+                }
+            }
+        })
+        .as_ref()
+        .ok_or_else(|| anyhow!("llama backend failed to initialise"))
+}
 
 impl Engine {
     /// The process-wide engine (one llama.cpp backend per process).
@@ -157,11 +181,10 @@ struct Loaded {
 }
 
 fn worker(rx: mpsc::Receiver<Cmd>) {
-    send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
-    let backend = match LlamaBackend::init() {
+    let backend = match backend() {
         Ok(b) => b,
         Err(e) => {
-            tracing::error!("llama backend init failed: {e}");
+            tracing::error!("{e:#}");
             return;
         }
     };
@@ -176,7 +199,7 @@ fn worker(rx: mpsc::Receiver<Cmd>) {
                     continue;
                 }
                 loaded = None; // free the previous model before loading another
-                let _ = reply.send(load_model(&backend, &path).map(|l| {
+                let _ = reply.send(load_model(backend, &path).map(|l| {
                     let info = l.info.clone();
                     loaded = Some(l);
                     info
@@ -204,7 +227,7 @@ fn worker(rx: mpsc::Receiver<Cmd>) {
             }
             Cmd::Generate { prompt, params, on_token, cancel, reply } => {
                 let _ = reply.send(match &loaded {
-                    Some(l) => generate(&backend, &l.model, &prompt, &params, on_token, &cancel),
+                    Some(l) => generate(backend, &l.model, &prompt, &params, on_token, &cancel),
                     None => Err(anyhow!("no model loaded")),
                 });
             }

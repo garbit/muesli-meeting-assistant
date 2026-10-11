@@ -167,6 +167,15 @@ pub fn list(c: &Connection) -> Result<Vec<Speaker>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Meetings in which any of the given speakers appear (their chunks name them).
+pub fn meetings_of(c: &Connection, speaker_ids: &[&str]) -> Result<Vec<String>> {
+    let json = serde_json::to_string(speaker_ids)?;
+    let mut stmt = c.prepare(
+        "SELECT DISTINCT meeting_id FROM meeting_speakers WHERE speaker_id IN (SELECT value FROM json_each(?1))",
+    )?;
+    Ok(stmt.query_map([json], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 // ---- commands -------------------------------------------------------------
 
 type CmdResult<T> = Result<T, String>;
@@ -189,10 +198,12 @@ pub fn speaker_assign(
     if name.is_empty() {
         return Err("name is empty".into());
     }
-    state
+    let id = state
         .db
         .with(|c| link_cluster(c, &meeting_id, &diar_label, speaker_id.as_deref(), &name))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    state.search.indexer.request(&meeting_id);
+    Ok(id)
 }
 
 #[tauri::command]
@@ -202,7 +213,8 @@ pub fn speaker_update(
     name: Option<String>,
     is_me: Option<bool>,
 ) -> CmdResult<()> {
-    state
+    let renamed = name.is_some();
+    let affected = state
         .db
         .with(|c| {
             if let Some(n) = name {
@@ -218,9 +230,13 @@ pub fn speaker_update(
                 }
                 c.execute("UPDATE speakers SET is_me = ?2 WHERE id = ?1", params![id, me as i64])?;
             }
-            Ok(())
+            if renamed { meetings_of(c, &[id.as_str()]) } else { Ok(Vec::new()) }
         })
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    for m in affected {
+        state.search.indexer.request(&m);
+    }
+    Ok(())
 }
 
 /// Merge `from` into `into`: relink clusters, average embeddings, delete `from`.
@@ -229,10 +245,11 @@ pub fn speaker_merge(state: State<'_, AppState>, from: String, into: String) -> 
     if from == into {
         return Ok(());
     }
-    state
+    let affected = state
         .db
         .with_mut(|c| {
             let tx = c.transaction()?;
+            let affected = meetings_of(&tx, &[from.as_str(), into.as_str()])?;
             let (ea, na): (Option<Vec<u8>>, i64) =
                 tx.query_row("SELECT embedding, sample_count FROM speakers WHERE id = ?1", [&into], |r| {
                     Ok((r.get(0)?, r.get(1)?))
@@ -267,20 +284,30 @@ pub fn speaker_merge(state: State<'_, AppState>, from: String, into: String) -> 
             tx.execute("UPDATE segments SET speaker_id = ?2 WHERE speaker_id = ?1", params![from, into])?;
             tx.execute("DELETE FROM speakers WHERE id = ?1", [&from])?;
             tx.commit()?;
-            Ok(())
+            Ok(affected)
         })
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    for m in affected {
+        state.search.indexer.request(&m);
+    }
+    Ok(())
 }
 
 #[tauri::command]
 pub fn speaker_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
-    state
+    // Collect before the delete: ON DELETE SET NULL turns the names back into "Speaker N".
+    let affected = state
         .db
         .with(|c| {
+            let affected = meetings_of(c, &[id.as_str()])?;
             c.execute("DELETE FROM speakers WHERE id = ?1", [&id])?;
-            Ok(())
+            Ok(affected)
         })
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    for m in affected {
+        state.search.indexer.request(&m);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
