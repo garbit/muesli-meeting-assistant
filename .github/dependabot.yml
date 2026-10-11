@@ -1,0 +1,32 @@
+# Monthly, grouped dependency updates. Each PR runs the full CI (free on a public repo).
+# Major cargo/npm bumps are left ungrouped so they arrive as separate PRs for review.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: swift
+    directory: /sidecar
+    schedule:
+      interval: monthly

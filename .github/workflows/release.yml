@@ -1,67 +1,139 @@
 name: Release
 
+# Tag push (vX.Y.Z): validate the commit, build the app with signed updater artifacts and open
+# a DRAFT GitHub release. Publishing the draft is a manual step (docs/RELEASING.md); the in-app
+# updater only sees published, non-prerelease releases.
+#
+# workflow_dispatch: dry run. Same build and signing; the bundles are attached to the run as
+# workflow artifacts and no release is created.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch: {}
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build:
-    runs-on: macos-15
+  validate:
+    uses: ./.github/workflows/validate.yml
+    with:
+      tag: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+      # The release job below builds and smoke-tests the exact bundle it ships.
+      bundle: false
+
+  release:
+    needs: validate
+    runs-on: macos-26
+    timeout-minutes: 90
+    permissions:
+      contents: write
     env:
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
+      # `secrets` may be used in a job's env but not in `if`, hence this indirection.
       HAS_APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      # Fat LTO is the committed release profile. If the 7 GB runner gets SIGKILLed during the
+      # link, `gh variable set RELEASE_LTO -b thin` switches CI to thin LTO without a commit.
+      CARGO_PROFILE_RELEASE_LTO: ${{ vars.RELEASE_LTO || 'fat' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master 2026-10-09
         with:
-          targets: aarch64-apple-darwin
-      - uses: Swatinem/rust-cache@v2
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ". -> target"
-      - name: Cache Swift build
-        uses: actions/cache@v4
+          shared-key: tauri-release # shared with the CI bundle job
+          cache-on-failure: true
+      - name: Identify the Swift compiler (part of the cache key)
+        id: swift
+        run: |
+          id="$(swift --version 2>&1 | sed -nE 's/.*swiftlang-([0-9.]+).*/\1/p' | head -n1)"
+          echo "id=${id:-unknown}" >> "$GITHUB_OUTPUT"
+      - name: Cache the SwiftPM build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: sidecar/.build
-          key: swift-${{ runner.os }}-${{ hashFiles('sidecar/Package.swift', 'sidecar/Package.resolved') }}
+          key: swift-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift.outputs.id }}-${{ hashFiles('sidecar/Package.swift', 'sidecar/Package.resolved') }}
+          restore-keys: |
+            swift-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift.outputs.id }}-
       - run: pnpm install --frozen-lockfile
-      # Only export the Apple signing variables when a certificate is configured;
-      # empty variables make the bundler try to import an empty certificate.
-      - name: Configure Developer ID signing
+
+      # Empty APPLE_* variables make the bundler try to import an empty certificate, so they are
+      # only exported when a Developer ID certificate is configured. Without one the bundle is
+      # ad-hoc signed (`signingIdentity: "-"` in tauri.conf.json).
+      - name: Configure Developer ID signing and notarisation
         if: env.HAS_APPLE_CERT == 'true'
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID_IN: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD_IN: ${{ secrets.APPLE_PASSWORD }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           {
-            echo "APPLE_CERTIFICATE=${{ secrets.APPLE_CERTIFICATE }}"
-            echo "APPLE_CERTIFICATE_PASSWORD=${{ secrets.APPLE_CERTIFICATE_PASSWORD }}"
-            echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}"
-            echo "APPLE_ID=${{ secrets.APPLE_ID }}"
-            echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}"
-            echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}"
+            echo "APPLE_CERTIFICATE=$CERT"
+            echo "APPLE_CERTIFICATE_PASSWORD=$CERT_PASSWORD"
+            echo "APPLE_SIGNING_IDENTITY=$IDENTITY"
+            echo "APPLE_ID=$APPLE_ID_IN"
+            echo "APPLE_PASSWORD=$APPLE_PASSWORD_IN"
+            echo "APPLE_TEAM_ID=$TEAM_ID"
           } >> "$GITHUB_ENV"
-      - name: Ad-hoc signing
-        if: env.HAS_APPLE_CERT != 'true'
-        run: echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
-      - name: Build and publish
-        uses: tauri-apps/tauri-action@v0
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Muesli ${{ github.ref_name }}
-          releaseBody: |
-            On first launch, right-click Muesli.app and choose Open (the app is not notarised yet).
-            After updating, macOS asks again for Microphone and System Audio Recording.
-          releaseDraft: true
-          prerelease: false
-          # The sidecar is built by beforeBuildCommand; updater artifacts are only produced here.
-          args: --target aarch64-apple-darwin --config '{"bundle":{"createUpdaterArtifacts":true}}'
+
+      # An empty tagName makes the action build without touching releases (the dry run).
+      # beforeBuildCommand builds the sidecar and the frontend; the --config file turns on the
+      # updater artifacts (.app.tar.gz + .sig), signed with TAURI_SIGNING_PRIVATE_KEY.
+      - name: Build, and on a tag create the draft release
+        id: tauri
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ env.IS_RELEASE == 'true' && github.ref_name || '' }}
+          releaseName: ${{ env.IS_RELEASE == 'true' && format('Muesli {0}', github.ref_name) || '' }}
+          releaseDraft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          # releaseBody is prepended to GitHub's generated notes (merged PRs since the last tag).
+          generateReleaseNotes: true
+          releaseBody: |
+            **Install:** download `Muesli_<version>_aarch64.dmg` and drag Muesli to Applications. The app
+            is not notarised yet: right-click Muesli.app and choose **Open** the first time.
+
+            **After updating:** macOS asks again for Microphone and System Audio Recording
+            (ad-hoc signed builds look like a new app to macOS). See docs/INSTALL.md.
+
+          uploadUpdaterJson: ${{ env.IS_RELEASE == 'true' }}
+          uploadWorkflowArtifacts: ${{ env.IS_RELEASE != 'true' }}
+          workflowArtifactNamePattern: muesli-dry-run-[bundle]
+          args: --config src-tauri/tauri.release.conf.json
+
+      - name: Smoke-test the bundle that was uploaded
+        run: scripts/smoke-doctor.sh target/release/bundle/macos/Muesli.app
+
+      - name: Summary
+        env:
+          APP_VERSION: ${{ steps.tauri.outputs.appVersion }}
+          RELEASE_URL: ${{ steps.tauri.outputs.releaseHtmlUrl }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          {
+            echo "### Muesli $APP_VERSION"
+            if [ "$IS_RELEASE" = "true" ]; then
+              echo "Draft release: $RELEASE_URL"
+              echo
+              echo "Install and test the DMG, then publish with: \`gh release edit $TAG --draft=false --latest\`"
+            else
+              echo "Dry run: the bundles are attached to this run as workflow artifacts. No release was created."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

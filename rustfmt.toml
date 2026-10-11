@@ -1,0 +1,3 @@
+# Wider than the default to keep the codebase's dense style; CI runs `cargo fmt --all --check`.
+max_width = 120
+use_small_heuristics = "Max"

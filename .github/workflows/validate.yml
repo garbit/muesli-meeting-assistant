@@ -1,0 +1,134 @@
+name: Validate
+
+# Reusable validation shared by ci.yml (pull requests, main) and release.yml (tags, dry runs).
+# Jobs after `versions` run in parallel; `bundle` is the long pole (full release build + DMG).
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag (vX.Y.Z). When set, every version source must equal it and the commit must be on main."
+        type: string
+        default: ""
+      bundle:
+        description: "Run the full `tauri build`, smoke-test the bundle with --doctor and upload the DMG."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  versions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: All version sources agree (and equal the tag, if any)
+        env:
+          TAG: ${{ inputs.tag }}
+        run: scripts/check-version.sh "$TAG"
+      - name: Tag commit is on main
+        if: inputs.tag != ''
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          git merge-base --is-ancestor HEAD origin/main \
+            || { echo "::error::$TAG points at a commit that is not on main"; exit 1; }
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: versions
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # pnpm version comes from package.json "packageManager".
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build # tsc && vite build
+
+  rust-check:
+    runs-on: macos-26
+    timeout-minutes: 60
+    needs: versions
+    env:
+      # Smaller dev artifacts; llama-cpp-sys-2 also picks its cmake profile off cargo's DEBUG flag.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master 2026-10-09
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: rust-check
+          cache-on-failure: true
+      - run: cargo fmt --all --check
+      # tauri_build only requires the externalBin file to exist; clippy and the unit tests never run it.
+      # Codegen embeds no frontend assets here (dev build with devUrl set), so no pnpm/dist is needed.
+      - name: Placeholder sidecar
+        run: |
+          mkdir -p src-tauri/binaries
+          cp /usr/bin/true "src-tauri/binaries/muesli-sidecar-$(rustc --print host-tuple)"
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --lib
+
+  bundle:
+    if: inputs.bundle
+    runs-on: macos-26
+    timeout-minutes: 90
+    needs: versions
+    env:
+      # Fat LTO is the committed release profile. If the 7 GB runner gets SIGKILLed during the
+      # link, `gh variable set RELEASE_LTO -b thin` switches CI to thin LTO without a commit.
+      CARGO_PROFILE_RELEASE_LTO: ${{ vars.RELEASE_LTO || 'fat' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master 2026-10-09
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: tauri-release
+          cache-on-failure: true
+      - name: Identify the Swift compiler (part of the cache key)
+        id: swift
+        run: |
+          id="$(swift --version 2>&1 | sed -nE 's/.*swiftlang-([0-9.]+).*/\1/p' | head -n1)"
+          echo "id=${id:-unknown}" >> "$GITHUB_OUTPUT"
+      - name: Cache the SwiftPM build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: sidecar/.build
+          key: swift-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift.outputs.id }}-${{ hashFiles('sidecar/Package.swift', 'sidecar/Package.resolved') }}
+          restore-keys: |
+            swift-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift.outputs.id }}-
+      - run: pnpm install --frozen-lockfile
+      # beforeBuildCommand builds the Swift sidecar and the frontend first. Ad-hoc signed.
+      - name: Build the app bundle
+        run: pnpm tauri build
+      - name: Smoke-test the bundle (--doctor against a scratch library)
+        run: scripts/smoke-doctor.sh target/release/bundle/macos/Muesli.app
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: muesli-dmg
+          path: target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

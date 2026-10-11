@@ -126,7 +126,7 @@ pub async fn download_gguf(
         tokio::fs::create_dir_all(parent).await?;
     }
     let url = format!("https://huggingface.co/{}/resolve/main/{}", entry.repo, file.path);
-    let client = reqwest::Client::builder().user_agent("muesli/0.1").build()?;
+    let client = reqwest::Client::builder().user_agent(concat!("muesli/", env!("CARGO_PKG_VERSION"))).build()?;
 
     let existing = file_size(&part);
     let mut req = client.get(&url);
