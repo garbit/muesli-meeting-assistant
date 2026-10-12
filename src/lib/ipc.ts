@@ -200,11 +200,21 @@ export interface LiveTranscript {
 }
 
 export interface PermissionsStatus {
+  /** "authorized" | "denied" | "restricted" | "notDetermined" | "unavailable" (capture helper missing). */
   microphone: string;
+  /** "authorized" | "denied" | "notDetermined" (the tap has not been exercised for this build). */
   systemAudio: string;
+  /** Why system audio is denied, when known. */
+  systemAudioDetail?: string | null;
   codeHash: string;
+  /** A different build was acknowledged before: this is the first launch after an update. */
   codeHashChanged: boolean;
+  /** No build was ever acknowledged: a fresh install. */
   firstRun: boolean;
+  /** Both grants confirmed. */
+  ready: boolean;
+  /** The prompts have not run for this build and something is missing; the UI runs them automatically. */
+  needsSetup: boolean;
 }
 
 export interface JobProgress {
@@ -250,8 +260,10 @@ export const ipc = {
   settingsSet: (settings: Settings) => invoke<Settings>("settings_set", { settings }),
   recordingDelete: (meetingId: string) => invoke<void>("recording_delete", { meetingId }),
   permissionsStatus: (refresh = false) => invoke<PermissionsStatus>("permissions_status", { refresh }),
+  /** Runs the prompts that macOS has not shown yet, then exercises the system audio tap. */
   permissionsRequest: () => invoke<PermissionsStatus>("permissions_request"),
-  permissionsAcknowledge: () => invoke<PermissionsStatus>("permissions_acknowledge"),
+  /** Re-reads the microphone and exercises the tap again; never prompts once macOS has decided. */
+  permissionsRecheck: () => invoke<PermissionsStatus>("permissions_recheck"),
   permissionsOpenSettings: (pane: "microphone" | "system-audio") => invoke<void>("permissions_open_settings", { pane }),
 
   speakersList: () => invoke<Speaker[]>("speakers_list"),
@@ -282,4 +294,5 @@ export const ipc = {
   onRecordingTranscript: (cb: (p: { meetingId: string; segment: LiveSegment }) => void) =>
     on<{ meetingId: string; segment: LiveSegment }>("recording:transcript", cb),
   onJobProgress: (cb: (p: JobProgress) => void) => on<JobProgress>("job:progress", cb),
+  onPermissionsChanged: (cb: (p: PermissionsStatus) => void) => on<PermissionsStatus>("permissions:changed", cb),
 };

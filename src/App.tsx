@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
-import { Link, NavLink, Route, Routes } from "react-router";
+import { useState } from "react";
+import { NavLink, Route, Routes } from "react-router";
 import { Library, Mic, Settings, Boxes, FileText, Users } from "lucide-react";
 import { cn } from "./lib/utils";
-import { ipc } from "./lib/ipc";
 import ErrorBoundary from "./components/ErrorBoundary";
 import RecordControl from "./components/RecordControl";
+import PermissionsBanner from "./components/PermissionsBanner";
+import PermissionsSetup from "./components/PermissionsSetup";
 import ModelsPage from "./features/models/ModelsPage";
 import LibraryPage from "./features/library/LibraryPage";
 import SettingsPage from "./features/settings/SettingsPage";
@@ -21,10 +22,8 @@ const nav = [
 ];
 
 export default function App() {
-  const [permsChanged, setPermsChanged] = useState(false);
-  useEffect(() => {
-    ipc.permissionsStatus().then((p) => setPermsChanged(p.codeHashChanged)).catch(() => {});
-  }, []);
+  // While the setup card is up, the banner would only repeat it.
+  const [setupVisible, setSetupVisible] = useState(false);
   return (
     <div className="flex h-full">
       <aside className="flex w-56 shrink-0 flex-col border-r border-neutral-200 bg-neutral-100/70 dark:border-neutral-800 dark:bg-neutral-900/60">
@@ -52,15 +51,8 @@ export default function App() {
       </aside>
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <div data-tauri-drag-region className="h-7 w-full shrink-0" />
-        {permsChanged && (
-          <div className="mx-6 mb-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
-            Muesli was updated and macOS has forgotten its Microphone and System Audio permissions.{" "}
-            <Link to="/settings" className="underline">
-              Re-grant them in Settings
-            </Link>{" "}
-            before your next recording.
-          </div>
-        )}
+        <PermissionsSetup onVisibleChange={setSetupVisible} />
+        <PermissionsBanner hidden={setupVisible} />
         <div className="min-h-0 flex-1 overflow-auto">
           <ErrorBoundary>
             <Routes>

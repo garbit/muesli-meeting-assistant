@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { Circle, Loader2, Square } from "lucide-react";
 import { ipc, type RecordingStatus } from "../lib/ipc";
+import { isMicBlocked, MIC_OFF_MESSAGE, permissions, usePermissions } from "../lib/permissions";
 import { cn, formatDuration } from "../lib/utils";
 
 /**
@@ -14,6 +15,8 @@ export default function RecordControl() {
   const [recording, setRecording] = useState<RecordingStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [micBlocked, setMicBlocked] = useState(false);
+  const { status: perms } = usePermissions();
 
   useEffect(() => {
     ipc.recordingStatus().then(setRecording).catch(() => {});
@@ -32,12 +35,22 @@ export default function RecordControl() {
   const toggle = async () => {
     setBusy(true);
     setError("");
+    setMicBlocked(false);
     try {
       if (recording) {
         const m = await ipc.recordingStop();
         setRecording(null);
         navigate(`/meetings/${m.id}`);
       } else {
+        // Ask for the microphone first if macOS has not decided yet, and refuse
+        // clearly when it is off (the backend refuses too; this just explains).
+        let p = perms;
+        if (p?.microphone === "notDetermined") p = await permissions.request();
+        if (isMicBlocked(p)) {
+          setMicBlocked(true);
+          setError(MIC_OFF_MESSAGE);
+          return;
+        }
         setRecording({ meetingId: "", elapsedMs: 0, starting: true, status: {} });
         const m = await ipc.recordingStart();
         setRecording({ meetingId: m.id, elapsedMs: 0, starting: false, status: {} });
@@ -103,7 +116,19 @@ export default function RecordControl() {
           {recording?.starting ? "Starting…" : "Record"}
         </button>
       )}
-      {error && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
+      {error && (
+        <p className="mt-2 text-xs text-red-600 dark:text-red-400">
+          {error}
+          {micBlocked && (
+            <>
+              {" "}
+              <button type="button" className="underline" onClick={() => permissions.openSettings("microphone")}>
+                Open System Settings
+              </button>
+            </>
+          )}
+        </p>
+      )}
     </div>
   );
 }

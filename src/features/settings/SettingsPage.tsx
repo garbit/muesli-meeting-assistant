@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { ipc, type AppInfo, type PermissionsStatus, type Settings, type Template } from "../../lib/ipc";
+import { ipc, type AppInfo, type Settings, type Template } from "../../lib/ipc";
 import { confirmDialog } from "../../lib/dialogs";
+import { permissions, usePermissions } from "../../lib/permissions";
 
 export default function SettingsPage() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
-  const [perms, setPerms] = useState<PermissionsStatus | null>(null);
+  const { status: perms, busy: permsBusy, error: permsError } = usePermissions();
   const [health, setHealth] = useState("");
   const [update, setUpdate] = useState<string>("");
   const [diag, setDiag] = useState<string>("");
@@ -18,7 +19,6 @@ export default function SettingsPage() {
     ipc.appInfo().then(setInfo).catch((e) => setError(String(e)));
     ipc.settingsGet().then(setSettings).catch((e) => setError(String(e)));
     ipc.templatesList().then(setTemplates).catch(() => {});
-    ipc.permissionsStatus().then(setPerms).catch(() => {});
   }, []);
 
   const updateSettings = (patch: Partial<Settings>) => {
@@ -55,41 +55,48 @@ export default function SettingsPage() {
 
       <section>
         <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Permissions</h2>
-        {perms?.codeHashChanged && (
-          <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
-            Muesli was updated. Because it is not yet signed with an Apple Developer ID, macOS forgets its permissions on every update. Re-grant
-            Microphone and System Audio Recording below, then press "I've re-granted".
-          </p>
-        )}
         <dl className="mt-3 grid grid-cols-[12rem_1fr] gap-y-2 text-sm">
           <dt className="text-neutral-500">Microphone</dt>
           <dd className="flex items-center gap-3">
-            {perms?.microphone ?? "…"}
-            <button className="text-xs underline" onClick={() => ipc.permissionsOpenSettings("microphone").catch((e) => setError(String(e)))}>
+            <PermissionWord value={perms?.microphone} />
+            <button className="text-xs underline" onClick={() => permissions.openSettings("microphone")}>
               Open System Settings
             </button>
           </dd>
           <dt className="text-neutral-500">System audio</dt>
-          <dd className="flex items-center gap-3">
-            {perms?.systemAudio === "unknown" ? "granted on first recording" : (perms?.systemAudio ?? "…")}
-            <button className="text-xs underline" onClick={() => ipc.permissionsOpenSettings("system-audio").catch((e) => setError(String(e)))}>
-              Open System Settings
-            </button>
+          <dd>
+            <div className="flex items-center gap-3">
+              <PermissionWord value={perms?.systemAudio} />
+              <button className="text-xs underline" onClick={() => permissions.openSettings("system-audio")}>
+                Open System Settings
+              </button>
+            </div>
+            {perms?.systemAudioDetail && <p className="mt-0.5 text-xs text-neutral-500">{capitalise(perms.systemAudioDetail)}.</p>}
           </dd>
         </dl>
-        <div className="mt-3 flex gap-2">
-          <button
-            onClick={() => ipc.permissionsRequest().then(setPerms).catch((e) => setError(String(e)))}
-            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm dark:border-neutral-700"
-          >
-            Request microphone access
-          </button>
-          {(perms?.codeHashChanged || perms?.firstRun) && (
-            <button onClick={() => ipc.permissionsAcknowledge().then(setPerms).catch((e) => setError(String(e)))} className="rounded-md bg-amber-600 px-3 py-1.5 text-sm font-medium text-white">
-              I've re-granted
+        <div className="mt-3 flex items-center gap-2">
+          {(perms?.microphone === "notDetermined" || perms?.systemAudio === "notDetermined") && (
+            <button
+              onClick={() => permissions.request()}
+              disabled={permsBusy}
+              className="rounded-md bg-amber-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60"
+            >
+              Grant access
             </button>
           )}
+          <button
+            onClick={() => permissions.recheck()}
+            disabled={permsBusy}
+            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-60 dark:border-neutral-700"
+          >
+            {permsBusy ? "Checking…" : "Re-check"}
+          </button>
+          {permsError && <span className="text-xs text-red-600 dark:text-red-400">{permsError}</span>}
         </div>
+        <p className="mt-2 text-xs text-neutral-500">
+          Muesli is signed ad-hoc, so macOS asks for both permissions again after every update. The prompts run by themselves on the
+          first launch of a new build (this one: {perms?.codeHash ?? "…"}).
+        </p>
       </section>
 
       <section>
@@ -219,4 +226,23 @@ export default function SettingsPage() {
       </section>
     </div>
   );
+}
+
+const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+function PermissionWord({ value }: { value?: string }) {
+  switch (value) {
+    case undefined:
+      return <span>…</span>;
+    case "authorized":
+      return <span className="text-green-700 dark:text-green-400">Granted</span>;
+    case "denied":
+      return <span className="text-red-700 dark:text-red-400">Off</span>;
+    case "restricted":
+      return <span className="text-red-700 dark:text-red-400">Restricted</span>;
+    case "notDetermined":
+      return <span>Not decided yet</span>;
+    default:
+      return <span>Could not check (capture helper missing)</span>;
+  }
 }

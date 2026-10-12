@@ -129,6 +129,8 @@ impl Recorder {
 
     pub async fn start(&self, app: &AppHandle, title: Option<String>) -> Result<Meeting> {
         let state = app.state::<AppState>();
+        // A denied microphone records silence; refuse with an actionable message instead.
+        crate::permissions::ensure_microphone(app).await?;
         let title = title.unwrap_or_else(|| format!("Meeting {}", chrono::Local::now().format("%a %d %b %H:%M")));
         let meeting = {
             let mut guard = self.phase.lock().await;
@@ -189,6 +191,13 @@ impl Recorder {
                         if let Ok(mut v) = ls.lock() {
                             *v = n.params.clone();
                         }
+                        // The tap's behaviour during a real recording is the truth about
+                        // the System Audio Recording grant; keep the permission state honest.
+                        crate::permissions::note_recording_system_audio(
+                            &app2,
+                            n.params["systemAudio"].as_str().unwrap_or(""),
+                            n.params["sysRms"].as_f64().unwrap_or(0.0),
+                        );
                         let elapsed =
                             n.params["elapsedMs"].as_u64().unwrap_or_else(|| spawned.elapsed().as_millis() as u64);
                         let _ = app2.emit(

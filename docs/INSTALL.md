@@ -20,13 +20,16 @@
 
 3. Open **Models** and install the **Balanced** preset (or **Fast** on a 16 GB
    Mac). Downloads come from Hugging Face and resume if interrupted.
-4. Press **Record** once with nothing playing. macOS asks for two permissions,
-   both attributed to Muesli:
+4. On the first launch Muesli shows a short welcome card and macOS asks for
+   two permissions, both attributed to Muesli:
    * **Microphone**: your side of the call.
    * **System Audio Recording**: the other participants. This appears under
      *Privacy & Security → Screen & System Audio Recording*.
 
-   Stop the test recording; it can be deleted from the library.
+   Allow both and the card closes by itself. If you refuse one, the card (and
+   later a banner) says which one and offers **Open System Settings**; Muesli
+   re-checks when you come back to its window, or on **Re-check** under
+   **Settings → Permissions**.
 
 ## After an update
 
@@ -34,9 +37,11 @@
 verifies its signature and relaunches Muesli.
 
 Muesli is signed ad-hoc, so macOS treats every build as a new application and
-forgets the two permissions above. After an update, open **Settings →
-Permissions** and re-grant them. This goes away once releases are signed with a
-Developer ID.
+forgets the two permissions above. On the first launch of a new build the
+prompts run again automatically. If macOS reports a permission as off even
+though System Settings shows Muesli as allowed, the entry belongs to the
+previous build: turn it off and on again (or remove it with the − button and
+re-grant). This goes away once releases are signed with a Developer ID.
 
 ## Where data lives
 

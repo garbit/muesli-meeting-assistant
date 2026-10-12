@@ -103,12 +103,20 @@ enum CaptureRole {
             case .restricted: mic = "restricted"
             default: mic = "notDetermined"
             }
-            return ["microphone": .string(mic), "systemAudio": "unknown"]
+            return ["microphone": .string(mic)]
         }
 
         server.register("permissions.request") { _, _ in
             let granted = await AVCaptureDevice.requestAccess(for: .audio)
             return ["microphone": .bool(granted)]
+        }
+
+        /// Exercise a process tap (and so trigger the System Audio Recording prompt
+        /// if macOS has not decided yet) and report what it delivered; see
+        /// `SystemAudioProbe` for why a plain create is not enough.
+        server.register("permissions.systemAudioProbe") { params, _ in
+            let timeout = params["timeoutMs"]?.int ?? 3000
+            return try jsonValue(await SystemAudioProbe.run(timeoutMs: timeout))
         }
 
         server.register("capture.start") { params, server in

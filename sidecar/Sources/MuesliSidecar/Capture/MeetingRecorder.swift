@@ -58,7 +58,7 @@ final class MeetingRecorder {
     // MARK: configuration
     private let outputDir: URL
     private let chunkSeconds: Double
-    private let excludedPIDs: Set<pid_t> = [getpid(), getppid()]
+    private let excludedPIDs = selfAndParentPIDs
 
     // MARK: queues
     private let ioQueue = DispatchQueue(label: "dev.garbett.muesli.capture.io", qos: .userInteractive)
