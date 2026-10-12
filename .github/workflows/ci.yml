@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: Cache Swift build
+        uses: actions/cache@v4
+        with:
+          path: sidecar/.build
+          key: swift-${{ runner.os }}-${{ hashFiles('sidecar/Package.swift', 'sidecar/Package.resolved') }}
+      - name: Frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec tsc --noEmit -p tsconfig.json
+          pnpm build
+      - name: Sidecar
+        run: scripts/build-sidecar.sh release
+      - name: Rust
+        run: |
+          cargo clippy -p muesli -p muesli-llm --all-targets -- -D warnings
+          cargo test -p muesli -p muesli-llm --lib
