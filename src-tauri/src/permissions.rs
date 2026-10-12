@@ -281,6 +281,14 @@ pub async fn probe(state: &AppState) -> Result<PermissionsStatus> {
 }
 
 fn publish(app: &AppHandle, status: &PermissionsStatus) {
+    tracing::info!(
+        "permissions: microphone={} systemAudio={} ready={} needsSetup={} build={}",
+        status.microphone,
+        status.system_audio,
+        status.ready,
+        status.needs_setup,
+        status.code_hash
+    );
     app.state::<PermissionsCache>().set(status);
     if let Err(e) = app.emit(EVENT, status) {
         tracing::warn!("emitting {EVENT}: {e}");

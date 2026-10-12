@@ -22,7 +22,10 @@ struct SystemAudioProbeResult: Codable {
     var tapPresent = false
     var start: Int32 = 0
     var firstIoMs: Int?
-    /// Whether any non-zero sample arrived on the tap stream.
+    /// Whether the tap delivered real audio: a sample at least `heardThreshold`
+    /// in magnitude (a fifth of the probe's own tone). A denied tap measured
+    /// exactly 0.0 on every attempt on macOS 26.5; the threshold keeps a stray
+    /// 1e-12 blip from ending an attempt before the tone has arrived.
     var nonZero = false
     /// Largest |sample| seen on the tap stream (0 when it stayed silent).
     var peak: Float = 0
@@ -46,6 +49,10 @@ struct SystemAudioProbeResult: Codable {
 /// until audio arrives or the budget runs out, because the tap can stay silent
 /// until the user answers.
 enum SystemAudioProbe {
+    /// Tone amplitude the probe plays, and the fraction of it that counts as heard.
+    static let toneAmplitude: Float = 1e-4
+    static let heardThreshold: Float = 2e-5
+
     static func run(timeoutMs: Int) async -> SystemAudioProbeResult {
         await withCheckedContinuation { (cont: CheckedContinuation<SystemAudioProbeResult, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -125,7 +132,7 @@ enum SystemAudioProbe {
         r.tapPresent = r.streams > r.subDeviceStreams
         guard r.tapPresent else { return }
 
-        let listener = TapListener(subDeviceStreams: r.subDeviceStreams)
+        let listener = TapListener(subDeviceStreams: r.subDeviceStreams, threshold: heardThreshold)
         let queue = DispatchQueue(label: "dev.garbett.muesli.probe.io", qos: .userInteractive)
         var procID: AudioDeviceIOProcID?
         let created = AudioDeviceCreateIOProcIDWithBlock(&procID, agg, queue) { _, inData, _, _, _ in
@@ -157,14 +164,16 @@ enum SystemAudioProbe {
 private final class TapListener: @unchecked Sendable {
     let heard = DispatchSemaphore(value: 0)
     private let subDeviceStreams: Int
+    private let threshold: Float
     private let lock: UnsafeMutablePointer<os_unfair_lock>
     private var firstIo: Date?
     private var nonZero = false
     private var peak: Float = 0
     private var signalled = false
 
-    init(subDeviceStreams: Int) {
+    init(subDeviceStreams: Int, threshold: Float) {
         self.subDeviceStreams = subDeviceStreams
+        self.threshold = threshold
         lock = .allocate(capacity: 1)
         lock.initialize(to: os_unfair_lock())
     }
@@ -189,7 +198,7 @@ private final class TapListener: @unchecked Sendable {
                     j += 1
                 }
             }
-            found = maxAbs > 0
+            found = maxAbs >= threshold
         }
         os_unfair_lock_lock(lock)
         if firstIo == nil { firstIo = Date() }
@@ -220,7 +229,7 @@ private final class ToneGenerator {
         let node = AVAudioSourceNode(format: format) { _, _, frameCount, abl -> OSStatus in
             let buffers = UnsafeMutableAudioBufferListPointer(abl)
             for frame in 0..<Int(frameCount) {
-                let v = sinf(phase) * 1e-4
+                let v = sinf(phase) * SystemAudioProbe.toneAmplitude
                 phase += step
                 if phase > 2 * .pi { phase -= 2 * .pi }
                 for b in buffers {
