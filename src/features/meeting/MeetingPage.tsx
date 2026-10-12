@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from "react";
-import { Link, useNavigate, useParams } from "react-router";
-import { ArrowLeft, FileAudio, Loader2, RefreshCw, Square, Trash2, X } from "lucide-react";
-import { ipc, type JobProgress, type LiveSegment, type MeetingDetail, type Settings, type Speaker } from "../../lib/ipc";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
+import { ArrowLeft, FileAudio, Loader2, RefreshCw, Square, Tag, Trash2, X } from "lucide-react";
+import { ipc, type Facet, type JobProgress, type LiveSegment, type MeetingDetail, type Settings, type Speaker } from "../../lib/ipc";
 import { cn, formatDuration } from "../../lib/utils";
 import { confirmDialog } from "../../lib/dialogs";
 import InlinePrompt from "../../components/InlinePrompt";
@@ -11,12 +11,19 @@ import LiveMeetingView from "./LiveMeetingView";
 import Player, { type PlayerHandle } from "../../components/Player";
 
 type Tab = "notes" | "transcript" | "summary" | "diagnostics";
+const TABS: Tab[] = ["notes", "transcript", "summary", "diagnostics"];
 
 export default function MeetingPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
+  // Deep links from search: ?tab=transcript&t=<ms> or ?tab=summary&section=<heading>.
+  const [params] = useSearchParams();
+  const paramTab = params.get("tab");
+  const paramT = params.get("t");
+  const paramSection = params.get("section");
   const [detail, setDetail] = useState<MeetingDetail | null>(null);
-  const [tab, setTab] = useState<Tab>("transcript");
+  const [tab, setTab] = useState<Tab>(TABS.includes(paramTab as Tab) ? (paramTab as Tab) : "transcript");
+  const [facets, setFacets] = useState<Facet[]>([]);
   const [job, setJob] = useState<JobProgress | null>(null);
   const [error, setError] = useState("");
   const [notes, setNotes] = useState("");
@@ -61,11 +68,15 @@ export default function MeetingPage() {
     }
   }, [id, flushNotes]);
 
+  const loadFacets = useCallback(() => ipc.meetingFacets(id).then(setFacets).catch(() => {}), [id]);
+
   useEffect(() => {
     seededFor.current = null;
     setActiveIndex(-1);
     setJob(null);
     load();
+    loadFacets();
+    if (TABS.includes(paramTab as Tab)) setTab(paramTab as Tab);
     ipc.speakersList().then(setKnown).catch(() => {});
     ipc.settingsGet().then(setSettings).catch(() => {});
     ipc.recordingStatus().then((r) => setIsLive(!!r && r.meetingId === id)).catch(() => {});
@@ -75,6 +86,9 @@ export default function MeetingPage() {
         if (p.meetingId !== id) return;
         setJob(p);
         if (p.state !== "running") load();
+      }),
+      ipc.onSearchIndex((p) => {
+        if (p.meetingId === id) loadFacets();
       }),
       ipc.onRecordingChanged((p) => {
         if (p.meetingId !== id) return;
@@ -89,12 +103,25 @@ export default function MeetingPage() {
       subs.forEach((s) => s.then((f) => f()));
       flushNotes();
     };
-  }, [id, load, flushNotes]);
+  }, [id, load, flushNotes, loadFacets, paramTab]);
 
   // Keep the segment under the playhead in view.
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [activeIndex]);
+
+  // A search deep link into the transcript: highlight the turn and cue the player without playing.
+  const deepLinked = useRef<string | null>(null);
+  useEffect(() => {
+    if (!detail || paramT == null || tab !== "transcript") return;
+    const key = `${id}:${paramT}`;
+    if (deepLinked.current === key) return;
+    const ms = Number(paramT);
+    if (!Number.isFinite(ms) || detail.segments.length === 0) return;
+    deepLinked.current = key;
+    setActiveIndex(indexAt(detail.segments, ms));
+    window.requestAnimationFrame(() => player.current?.seek(ms, false));
+  }, [detail, paramT, tab, id]);
 
   const names = useMemo(() => {
     const map: Record<string, string> = {};
@@ -246,8 +273,27 @@ export default function MeetingPage() {
           )}
         </div>
       )}
+      {facets.some((f) => f.kind === "topic" || f.kind === "type") && (
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-neutral-200 px-6 py-2 text-xs dark:border-neutral-800">
+          <Tag className="size-3.5 text-neutral-400" />
+          {facets
+            .filter((f) => f.kind === "type")
+            .map((f) => (
+              <Link key={`type-${f.value}`} to={`/?type=${encodeURIComponent(f.value)}`} className="rounded-full bg-sky-100 px-2 py-0.5 text-sky-800 hover:bg-sky-200 dark:bg-sky-950 dark:text-sky-200" title="Show meetings of this type">
+                {f.value}
+              </Link>
+            ))}
+          {facets
+            .filter((f) => f.kind === "topic")
+            .map((f) => (
+              <Link key={`topic-${f.value}`} to={`/?topic=${encodeURIComponent(f.value)}`} className="rounded-full bg-neutral-200 px-2 py-0.5 text-neutral-700 hover:bg-neutral-300 dark:bg-neutral-800 dark:text-neutral-300" title="Show meetings about this topic">
+                {f.value}
+              </Link>
+            ))}
+        </div>
+      )}
       <nav className="flex gap-1 border-b border-neutral-200 px-6 dark:border-neutral-800">
-        {(["notes", "transcript", "summary", "diagnostics"] as Tab[]).map((t) => (
+        {TABS.map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -346,7 +392,7 @@ export default function MeetingPage() {
             )}
           </div>
         )}
-        {tab === "summary" && <SummaryTab detail={detail} onChanged={load} />}
+        {tab === "summary" && <SummaryTab detail={detail} onChanged={load} section={paramSection} />}
         {tab === "diagnostics" && <DiagnosticsTab meetingId={id} />}
       </div>
       {tab === "transcript" && recordingPath && <Player ref={player} path={recordingPath} onTime={onTime} />}

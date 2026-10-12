@@ -1,27 +1,49 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import ReactMarkdown from "react-markdown";
 import { save } from "@tauri-apps/plugin-dialog";
 import { Copy, Download, Loader2, Sparkles, Square } from "lucide-react";
-import { ipc, type MeetingDetail, type Template } from "../../lib/ipc";
+import { ipc, type MeetingDetail, type RelatedMeeting, type Template } from "../../lib/ipc";
+import { formatDuration } from "../../lib/utils";
 
 /**
  * Summary tab. Streaming text is accumulated in a ref and flushed to state on a
  * 60 ms timer so ReactMarkdown is not re-run on every token; while streaming the
  * text renders as pre-formatted, Markdown only once the summary is done.
  */
-export default function SummaryTab({ detail, onChanged }: { detail: MeetingDetail; onChanged: () => void }) {
+export default function SummaryTab({ detail, onChanged, section }: { detail: MeetingDetail; onChanged: () => void; section?: string | null }) {
   const meetingId = detail.meeting.id;
   const [templates, setTemplates] = useState<Template[]>([]);
   const [templateId, setTemplateId] = useState<string>(detail.summaries[0]?.templateId ?? "general");
   const [running, setRunning] = useState<{ summaryId: string; text: string } | null>(null);
   const [notice, setNotice] = useState<{ kind: "error" | "info"; text: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [related, setRelated] = useState<RelatedMeeting[]>([]);
   const bufferRef = useRef<{ summaryId: string; text: string } | null>(null);
   const flushTimer = useRef<number | null>(null);
+  const articleRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     ipc.templatesList().then(setTemplates).catch(() => {});
   }, []);
+
+  const latestId = detail.summaries.find((s) => s.status === "done")?.id;
+
+  // Related meetings (by summary vector); hidden when the embedding model is missing.
+  useEffect(() => {
+    if (!latestId) {
+      setRelated([]);
+      return;
+    }
+    ipc.meetingRelated(meetingId).then(setRelated).catch(() => setRelated([]));
+  }, [meetingId, latestId]);
+
+  // A search deep link into a section: scroll its heading into view once rendered.
+  useEffect(() => {
+    if (!section || !latestId) return;
+    const el = Array.from(articleRef.current?.querySelectorAll("h2") ?? []).find((h) => h.textContent?.trim() === section);
+    el?.scrollIntoView({ block: "start" });
+  }, [section, latestId]);
 
   // Pick up a summary that is already running (started by the pipeline or
   // before this tab mounted).
@@ -177,12 +199,35 @@ export default function SummaryTab({ detail, onChanged }: { detail: MeetingDetai
           )
         ) : latest ? (
           <>
-            <article className="prose prose-sm prose-neutral max-w-none dark:prose-invert">
+            <article ref={articleRef} className="prose prose-sm prose-neutral max-w-none dark:prose-invert">
               <ReactMarkdown>{latest.bodyMd}</ReactMarkdown>
             </article>
             <p className="mt-6 text-[11px] text-neutral-400">
               {latest.modelId} · {new Date(latest.createdAt).toLocaleString()}
             </p>
+            {related.length > 0 && (
+              <section className="mt-6 rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Related meetings</h3>
+                <ul className="mt-2 divide-y divide-neutral-100 dark:divide-neutral-800">
+                  {related.map((r) => (
+                    <li key={r.meeting.id}>
+                      <Link to={`/meetings/${r.meeting.id}`} className="flex items-center gap-3 py-2 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-900">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-medium">{r.meeting.title}</div>
+                          <div className="truncate text-xs text-neutral-500">
+                            {new Date(r.meeting.startedAt ?? r.meeting.createdAt).toLocaleDateString()}
+                            {r.meeting.durationMs ? ` · ${formatDuration(r.meeting.durationMs)}` : ""}
+                            {r.sharedSpeakers.length > 0 && ` · with ${r.sharedSpeakers.join(", ")}`}
+                            {r.sharedTopics.length > 0 && ` · ${r.sharedTopics.join(", ")}`}
+                          </div>
+                        </div>
+                        <span className="shrink-0 text-[11px] text-neutral-400">{Math.round(r.score * 100)}%</span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
           </>
         ) : (
           <p className="text-sm text-neutral-500">No summary yet. Pick a template and press Summarise.</p>

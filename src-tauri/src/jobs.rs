@@ -203,6 +203,15 @@ pub async fn run_processing(
                 meetings::set_state(c, meeting_id, "transcribed")?;
                 Ok(())
             })?;
+            // Make the transcript searchable now, before any auto-summary takes the GPU
+            // (covers headless runs too). Indexing problems never fail the job.
+            let ctx = crate::search::index::IndexCtx::from_state(state);
+            let mid = meeting_id.to_string();
+            match tokio::task::spawn_blocking(move || crate::search::index::reconcile(&ctx, &mid)).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => tracing::warn!("indexing {meeting_id} after transcription failed: {e:#}"),
+                Err(e) => tracing::warn!("indexing task panicked: {e}"),
+            }
         }
         Err(e) => {
             let cancelled = cancel.load(std::sync::atomic::Ordering::Relaxed);

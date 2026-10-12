@@ -60,6 +60,40 @@ struct Running {
     cancel: Arc<AtomicBool>,
 }
 
+impl SummaryJobs {
+    /// Whether the single big-model slot is taken (a summary, a facets backfill or an ask).
+    pub async fn is_running(&self) -> bool {
+        self.running.lock().await.is_some()
+    }
+
+    /// Claim the slot for a non-summary job; fails while anything else holds it.
+    pub async fn try_begin(&self, meeting_id: &str, job_id: &str, cancel: Arc<AtomicBool>) -> Result<()> {
+        let mut guard = self.running.lock().await;
+        if guard.is_some() {
+            bail!("a summary is already being generated");
+        }
+        *guard = Some(Running { meeting_id: meeting_id.to_string(), summary_id: job_id.to_string(), cancel });
+        Ok(())
+    }
+
+    /// Release the slot and start the idle-unload timer.
+    pub async fn end(self: &Arc<Self>) {
+        *self.running.lock().await = None;
+        schedule_idle_unload(self);
+    }
+
+    /// Ask whatever holds the slot to stop.
+    pub async fn cancel_current(&self) -> bool {
+        match self.running.lock().await.as_ref() {
+            Some(r) => {
+                r.cancel.store(true, Ordering::Relaxed);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SummaryRunning {
@@ -315,6 +349,7 @@ async fn summarise_validated(
         error: None,
     });
 
+    let (model_path, n_ctx) = (v.model_path.clone(), v.n_ctx);
     let mid = meeting_id.to_string();
     let sid = summary_id.to_string();
     let emit2 = emit.clone();
@@ -353,8 +388,19 @@ async fn summarise_validated(
         summary_id: summary_id.to_string(),
         token: None,
         status: if error.is_some() && status == "done" { "failed".into() } else { status.into() },
-        error,
+        error: error.clone(),
     });
+    if status == "done" && error.is_none() {
+        // Facets and the search index, while the model is still loaded and the slot still held.
+        let (db, search) = (state.db.clone(), state.search.clone());
+        let (mid, sid) = (meeting_id.to_string(), summary_id.to_string());
+        if let Err(e) =
+            tokio::task::spawn_blocking(move || crate::facets::after_summary(db, search, mid, sid, model_path, n_ctx))
+                .await
+        {
+            tracing::warn!("facets task panicked: {e}");
+        }
+    }
     result.map(|_| summary_id.to_string())
 }
 
@@ -527,12 +573,7 @@ pub async fn summary_status(jobs: State<'_, Arc<SummaryJobs>>) -> CmdResult<Opti
 
 #[tauri::command]
 pub async fn summary_cancel(jobs: State<'_, Arc<SummaryJobs>>) -> CmdResult<bool> {
-    let guard = jobs.running.lock().await;
-    if let Some(r) = guard.as_ref() {
-        r.cancel.store(true, Ordering::Relaxed);
-        return Ok(true);
-    }
-    Ok(false)
+    Ok(jobs.cancel_current().await)
 }
 
 #[derive(Serialize)]

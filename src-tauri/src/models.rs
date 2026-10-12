@@ -82,6 +82,11 @@ impl Manifest {
     pub fn default_llm(&self) -> Option<&ModelEntry> {
         self.models.iter().find(|m| m.kind == "llm" && m.default)
     }
+
+    /// The embedding model used by search; preset-independent.
+    pub fn default_embedding(&self) -> Option<&ModelEntry> {
+        self.models.iter().find(|m| m.kind == "embedding" && m.default)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,6 +204,8 @@ mod tests {
         let m = Manifest::embedded().unwrap();
         assert!(m.models.len() >= 4);
         assert_eq!(m.default_llm().unwrap().id, "gemma-4-26b-a4b-it-q4_0");
+        assert_eq!(m.default_embedding().unwrap().id, "embeddinggemma-300m-q8_0");
+        assert_eq!(m.default_embedding().unwrap().runtime, "llama.cpp");
         assert!(m.get("qwen-anything").is_err(), "policy gate must reject unknown ids");
         assert!(m.presets.contains_key("balanced"));
     }

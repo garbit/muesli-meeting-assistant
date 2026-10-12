@@ -11,7 +11,7 @@ pub struct Db {
     conn: Mutex<Connection>,
 }
 
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/001_init.sql")];
+const MIGRATIONS: &[&str] = &[include_str!("../migrations/001_init.sql"), include_str!("../migrations/002_search.sql")];
 
 impl Db {
     pub fn open(path: &Path) -> Result<Self> {

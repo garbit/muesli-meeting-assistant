@@ -11,6 +11,18 @@ fn main() {
         // Print a diagnostics report for the real library (models, meetings, jobs, log tail).
         std::process::exit(muesli_lib::diagnostics::doctor());
     }
+    if args.len() >= 3 && args[1] == "--search" {
+        // Query the real library's search index: words plus --speaker/--since/--until/--limit.
+        std::process::exit(muesli_lib::headless::search_cli(&args[2..]));
+    }
+    if args.len() >= 2 && args[1] == "--reindex" {
+        // Rebuild stale entries of the real library's search index, synchronously.
+        std::process::exit(muesli_lib::headless::reindex_cli());
+    }
+    if args.len() >= 3 && args[1] == "--ask" {
+        // Answer a question from the real library with citations.
+        std::process::exit(muesli_lib::headless::ask_cli(&args[2..].join(" ")));
+    }
     if args.len() >= 4 && args[1] == "--capture-test" {
         // Record N seconds of mic + system audio into a directory and write capture-test.json there.
         // Launch via `open -a Muesli.app --args --capture-test 8 /tmp/dir` so macOS attributes the

@@ -95,6 +95,54 @@ models are allowed and why.
   template is parsed once per load (minijinja with Python-compat helpers) and
   falls back to the Gemma 4 layout if it cannot be rendered.
 
+### Search (`src-tauri/src/search/`, `crates/llm/src/embed.rs`)
+
+* **Chunking** (`chunk.rs`, pure functions): transcript turns (merged with the
+  summariser's rule) are packed into windows of about 1 000 characters (cap
+  1 600; a longer turn splits at sentence ends), each window starting with the
+  previous one's last short turn as overlap. Summaries split per `## ` section
+  (skipping "None noted."), notes and the title are chunks of their own, and the
+  extracted facets form a keyword-only chunk. Every chunk records its time span,
+  segment range and speakers so a hit can deep-link.
+* **Index lifecycle** (`index.rs`): the index is derived state. `reconcile(meeting)`
+  fingerprints the inputs (latest transcript and summary ids, title, notes,
+  resolved speaker names, facets); when it changed, chunk rows are replaced in
+  one transaction and vectors whose embedded text is unchanged are reused by
+  hash, so a notes edit re-embeds only the notes. Hooks run after transcription
+  (synchronously, before any auto-summary), after a summary, on title/notes
+  edits and on every speaker change; a coalescing background queue (`Indexer`)
+  drains one meeting at a time and yields while a summary runs. Startup queues
+  whatever is stale, and the whole index can be rebuilt (Settings → Rebuild
+  index, or `muesli --reindex`).
+* **Hybrid ranking** (`query.rs`): the filters (people with any/all, date,
+  speaker count with a 15 s speech floor, duration, source, has-summary, facets)
+  are plain SQL and yield the candidate meetings. FTS5 (`chunks_fts`, external
+  content, bm25) ranks chunks by keywords (phrases quoted, stop words dropped,
+  prefix match on the last word, OR fallback when AND finds nothing); the vector
+  index ranks them by meaning (cosine ≥ `MIN_COSINE`). Reciprocal rank fusion
+  (k = 60) merges the two lists, a meeting scores by its best chunk plus a small
+  breadth bonus, and its top three non-overlapping chunks become snippets.
+* **Vectors** (`embed.rs`, `vectors.rs`): EmbeddingGemma-300M (Q8_0) runs through
+  llama.cpp on its own `muesli-embed` thread with one persistent context that
+  packs up to eight texts per decode, sharing the process backend with the
+  summariser. Documents are embedded as `title: … | text: …`, queries as
+  `task: search result | query: …`; the first 256 Matryoshka dimensions are kept,
+  unit-normalised, stored in `chunks.vec` and held in memory as a brute-force
+  index (20 k chunks ≈ 20 MB and about 2 ms per query). Without the model
+  everything still works as keyword search; installing it queues the vector
+  pass. The model unloads after ten idle minutes.
+* **Facets** (`facets.rs`): after each summary (setting `extractFacets`), while
+  the big model is still loaded, one JSON-only prompt extracts the meeting type,
+  topics, people, organisations, projects, decisions and actions into
+  `meeting_facets`. They drive the Topics/Type chips and the facet strip on the
+  meeting page; they are advisory and never required for retrieval.
+* **Related meetings**: the normalised mean of a meeting's summary chunk vectors
+  (`meeting_vectors`), compared by cosine (≥ 0.5), shown under the summary.
+* **Ask** (`ask.rs`): the same retrieval flattened to at most twelve excerpts
+  (three per meeting) within a 6 000-token prompt, answered by the summarisation
+  model under the single summary job slot, streamed as `ask:token`, with `[n]`
+  citations that deep-link into the cited turn or section. Single turn.
+
 ### Live transcript and playback
 
 * While recording, the capture sidecar also runs FluidAudio's sliding-window
