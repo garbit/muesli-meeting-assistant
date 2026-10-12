@@ -2,12 +2,12 @@
 
 use std::sync::Arc;
 
+use crate::AppState;
 use crate::db::Db;
 use crate::jobs;
 use crate::meetings;
 use crate::models::Manifest;
 use crate::paths::Paths;
-use crate::AppState;
 
 /// Headless runs never touch the real library unless `MUESLI_HOME` is set explicitly.
 fn use_scratch_home() {
@@ -81,9 +81,22 @@ async fn run(path: &str) -> anyhow::Result<()> {
     let detail = state.db.with(|c| meetings::detail(c, &meeting.id))?.expect("meeting");
     let names: std::collections::HashMap<_, _> =
         state.db.with(|c| meetings::speaker_names(c, &meeting.id))?.into_iter().collect();
-    println!("meeting {} ({}): {} segments, {} speakers, {:.1}s", meeting.id, meeting.title, detail.segments.len(), detail.speakers.len(), t0.elapsed().as_secs_f32());
+    println!(
+        "meeting {} ({}): {} segments, {} speakers, {:.1}s",
+        meeting.id,
+        meeting.title,
+        detail.segments.len(),
+        detail.speakers.len(),
+        t0.elapsed().as_secs_f32()
+    );
     for sp in &detail.speakers {
-        println!("  {} → {} (speech {} ms, mic ratio {:?})", sp.diar_label, sp.display_name.clone().unwrap_or_default(), sp.speech_ms, sp.mic_ratio);
+        println!(
+            "  {} → {} (speech {} ms, mic ratio {:?})",
+            sp.diar_label,
+            sp.display_name.clone().unwrap_or_default(),
+            sp.speech_ms,
+            sp.mic_ratio
+        );
     }
     for s in &detail.segments {
         let name = names.get(&s.diar_label).cloned().unwrap_or(s.diar_label.clone());
@@ -93,7 +106,9 @@ async fn run(path: &str) -> anyhow::Result<()> {
     if let Ok(spec) = std::env::var("MUESLI_NAME_SPEAKERS") {
         for pair in spec.split(',') {
             if let Some((label, name)) = pair.split_once('=') {
-                let id = state.db.with(|c| crate::speakers::link_cluster(c, &meeting.id, label.trim(), None, name.trim()))?;
+                let id = state
+                    .db
+                    .with(|c| crate::speakers::link_cluster(c, &meeting.id, label.trim(), None, name.trim()))?;
                 println!("named {label} → {name} (speaker {id})");
             }
         }
@@ -164,7 +179,10 @@ pub fn capture_test(seconds: &str, dir: &str) -> i32 {
             0
         }
         Err(e) => {
-            let _ = std::fs::write(dir.join("capture-test.json"), serde_json::json!({"error": format!("{e:#}")}).to_string());
+            let _ = std::fs::write(
+                dir.join("capture-test.json"),
+                serde_json::json!({"error": format!("{e:#}")}).to_string(),
+            );
             eprintln!("capture test failed: {e:#}");
             1
         }

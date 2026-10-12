@@ -13,14 +13,14 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use llama_cpp_2::context::params::{KvCacheType, LlamaContextParams};
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::LlamaModel;
+use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::sampling::LlamaSampler;
-use llama_cpp_2::{send_logs_to_tracing, LogOptions};
+use llama_cpp_2::{LogOptions, send_logs_to_tracing};
 
 pub use template::ChatMessage;
 
@@ -62,12 +62,31 @@ pub struct ModelInfo {
 pub type TokenCallback = Box<dyn FnMut(&str) + Send>;
 
 enum Cmd {
-    Load { path: PathBuf, reply: Sender<Result<ModelInfo>> },
-    Unload { reply: Sender<()> },
-    Info { reply: Sender<Option<ModelInfo>> },
-    CountTokens { text: String, reply: Sender<Result<usize>> },
-    RenderChat { messages: Vec<ChatMessage>, reply: Sender<Result<String>> },
-    Generate { prompt: String, params: GenParams, on_token: TokenCallback, cancel: Arc<AtomicBool>, reply: Sender<Result<GenResult>> },
+    Load {
+        path: PathBuf,
+        reply: Sender<Result<ModelInfo>>,
+    },
+    Unload {
+        reply: Sender<()>,
+    },
+    Info {
+        reply: Sender<Option<ModelInfo>>,
+    },
+    CountTokens {
+        text: String,
+        reply: Sender<Result<usize>>,
+    },
+    RenderChat {
+        messages: Vec<ChatMessage>,
+        reply: Sender<Result<String>>,
+    },
+    Generate {
+        prompt: String,
+        params: GenParams,
+        on_token: TokenCallback,
+        cancel: Arc<AtomicBool>,
+        reply: Sender<Result<GenResult>>,
+    },
 }
 
 /// Handle to the engine thread. Clone freely; commands are serialised.
@@ -118,7 +137,13 @@ impl Engine {
         self.send(|reply| Cmd::RenderChat { messages: messages.to_vec(), reply })?
     }
 
-    pub fn generate(&self, prompt: &str, params: GenParams, on_token: TokenCallback, cancel: Arc<AtomicBool>) -> Result<GenResult> {
+    pub fn generate(
+        &self,
+        prompt: &str,
+        params: GenParams,
+        on_token: TokenCallback,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<GenResult> {
         self.send(|reply| Cmd::Generate { prompt: prompt.to_string(), params, on_token, cancel, reply })?
     }
 }
@@ -190,8 +215,10 @@ fn worker(rx: mpsc::Receiver<Cmd>) {
 fn load_model(backend: &LlamaBackend, path: &Path) -> Result<Loaded> {
     let t0 = Instant::now();
     let params = LlamaModelParams::default().with_n_gpu_layers(1000);
-    let model = LlamaModel::load_from_file(backend, path, &params).with_context(|| format!("loading {}", path.display()))?;
-    let template_src = model.chat_template(None).ok().map(|t| String::from_utf8_lossy(t.as_c_str().to_bytes()).to_string());
+    let model =
+        LlamaModel::load_from_file(backend, path, &params).with_context(|| format!("loading {}", path.display()))?;
+    let template_src =
+        model.chat_template(None).ok().map(|t| String::from_utf8_lossy(t.as_c_str().to_bytes()).to_string());
     let bos = model
         .vocab()
         .tokenize(b"", true, true)
@@ -212,7 +239,12 @@ fn load_model(backend: &LlamaBackend, path: &Path) -> Result<Loaded> {
         size_bytes: model.size(),
         has_chat_template: renderer.is_some(),
     };
-    tracing::info!("loaded {} in {:.1}s (bos={bos:?}, template={})", path.display(), t0.elapsed().as_secs_f32(), renderer.is_some());
+    tracing::info!(
+        "loaded {} in {:.1}s (bos={bos:?}, template={})",
+        path.display(),
+        t0.elapsed().as_secs_f32(),
+        renderer.is_some()
+    );
     Ok(Loaded { info, model, renderer, bos })
 }
 
@@ -312,5 +344,12 @@ fn generate(
         text.push_str(&s);
         on_token(&s);
     }
-    Ok(GenResult { text, prompt_tokens: tokens.len(), output_tokens: n_gen, prompt_seconds, gen_seconds: t1.elapsed().as_secs_f32(), cancelled })
+    Ok(GenResult {
+        text,
+        prompt_tokens: tokens.len(),
+        output_tokens: n_gen,
+        prompt_seconds,
+        gen_seconds: t1.elapsed().as_secs_f32(),
+        cancelled,
+    })
 }

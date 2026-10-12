@@ -138,10 +138,11 @@ pub fn run() {
         .on_window_event(|window, event| {
             // Closing the main window keeps the app (and any recording) alive in the menu bar.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event
-                && window.label() == "main" {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
+                && window.label() == "main"
+            {
+                api.prevent_close();
+                let _ = window.hide();
+            }
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -168,7 +169,12 @@ pub fn run() {
                                 // Covers a start still in flight plus encoding a long meeting.
                                 // If it does run out, the sidecar still finalises on its own
                                 // and the next launch recovers the file.
-                                match tokio::time::timeout(std::time::Duration::from_secs(720), recorder.stop_for_exit(&app2)).await {
+                                match tokio::time::timeout(
+                                    std::time::Duration::from_secs(720),
+                                    recorder.stop_for_exit(&app2),
+                                )
+                                .await
+                                {
                                     Ok(Ok(m)) => tracing::info!("recording {} finalised before exit", m.id),
                                     Ok(Err(e)) => tracing::warn!("stopping recording before exit failed: {e:#}"),
                                     Err(_) => tracing::warn!("stopping recording before exit timed out"),

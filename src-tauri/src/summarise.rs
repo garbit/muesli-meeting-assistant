@@ -1,23 +1,23 @@
 //! Summarisation: prompt building, token budgeting with map-reduce fallback,
 //! streaming generation through the llama.cpp engine, validation and storage.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use muesli_llm::{ChatMessage, Engine, GenParams};
 use rusqlite::params;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 
+use crate::AppState;
 use crate::db::{new_id, now_iso};
 use crate::meetings;
 use crate::models::Manifest;
 use crate::paths::Paths;
 use crate::templates;
-use crate::AppState;
 
 pub const SYSTEM_PROMPT: &str = "You are Muesli, a meeting assistant that writes accurate, concrete summaries of meeting transcripts. \
 Use only information from the transcript and the user's notes; never invent names, numbers or decisions. \
@@ -165,12 +165,24 @@ pub fn prepare(state: &AppState, meeting_id: &str, template_id: Option<&str>) ->
     if detail.segments.is_empty() {
         bail!("meeting has no transcript yet");
     }
-    let name_of = |label: &str| names.iter().find(|(l, _)| l == label).map(|(_, n)| n.clone()).unwrap_or_else(|| label.to_string());
-    let turns: Vec<Turn> = detail.segments.iter().map(|s| Turn { start_ms: s.start_ms, name: name_of(&s.diar_label), text: s.text.clone() }).collect();
+    let name_of = |label: &str| {
+        names.iter().find(|(l, _)| l == label).map(|(_, n)| n.clone()).unwrap_or_else(|| label.to_string())
+    };
+    let turns: Vec<Turn> = detail
+        .segments
+        .iter()
+        .map(|s| Turn { start_ms: s.start_ms, name: name_of(&s.diar_label), text: s.text.clone() })
+        .collect();
     let transcript = render_transcript(&turns);
     let m = &detail.meeting;
-    let duration = m.duration_ms.map(|ms| format!("{} min", (ms / 60_000).max(1))).unwrap_or_else(|| "unknown length".into());
-    let date = m.started_at.clone().or(Some(m.created_at.clone())).map(|d| d.chars().take(10).collect::<String>()).unwrap_or_default();
+    let duration =
+        m.duration_ms.map(|ms| format!("{} min", (ms / 60_000).max(1))).unwrap_or_else(|| "unknown length".into());
+    let date = m
+        .started_at
+        .clone()
+        .or(Some(m.created_at.clone()))
+        .map(|d| d.chars().take(10).collect::<String>())
+        .unwrap_or_default();
     let speakers = names.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>().join(", ");
     let notes = if m.notes_md.trim().is_empty() { "(none)".to_string() } else { m.notes_md.clone() };
     let vars = vec![
@@ -224,7 +236,13 @@ pub fn validate(state: &AppState, meeting_id: &str, template_id: Option<&str>) -
 
 /// Run a summary while registering it in `jobs` so the UI can see and cancel it
 /// whether it was started from the pipeline or from a button.
-pub async fn summarise_tracked(emit: Emit, state: &AppState, jobs: &Arc<SummaryJobs>, meeting_id: &str, template_id: Option<&str>) -> Result<String> {
+pub async fn summarise_tracked(
+    emit: Emit,
+    state: &AppState,
+    jobs: &Arc<SummaryJobs>,
+    meeting_id: &str,
+    template_id: Option<&str>,
+) -> Result<String> {
     let validated = validate(state, meeting_id, template_id)?;
     let cancel = Arc::new(AtomicBool::new(false));
     let summary_id = new_id();
@@ -233,7 +251,11 @@ pub async fn summarise_tracked(emit: Emit, state: &AppState, jobs: &Arc<SummaryJ
         if guard.is_some() {
             bail!("a summary is already being generated");
         }
-        *guard = Some(Running { meeting_id: meeting_id.to_string(), summary_id: summary_id.clone(), cancel: cancel.clone() });
+        *guard = Some(Running {
+            meeting_id: meeting_id.to_string(),
+            summary_id: summary_id.clone(),
+            cancel: cancel.clone(),
+        });
     }
     let result = summarise_validated(emit, state, meeting_id, &summary_id, validated, cancel).await;
     *jobs.running.lock().await = None;
@@ -258,13 +280,26 @@ fn schedule_idle_unload(jobs: &Arc<SummaryJobs>) {
 }
 
 /// Headless entry point: validate and run without the job registry.
-pub async fn summarise(emit: Emit, state: &AppState, meeting_id: &str, template_id: Option<&str>, cancel: Arc<AtomicBool>) -> Result<String> {
+pub async fn summarise(
+    emit: Emit,
+    state: &AppState,
+    meeting_id: &str,
+    template_id: Option<&str>,
+    cancel: Arc<AtomicBool>,
+) -> Result<String> {
     let validated = validate(state, meeting_id, template_id)?;
     let summary_id = new_id();
     summarise_validated(emit, state, meeting_id, &summary_id, validated, cancel).await
 }
 
-async fn summarise_validated(emit: Emit, state: &AppState, meeting_id: &str, summary_id: &str, v: Validated, cancel: Arc<AtomicBool>) -> Result<String> {
+async fn summarise_validated(
+    emit: Emit,
+    state: &AppState,
+    meeting_id: &str,
+    summary_id: &str,
+    v: Validated,
+    cancel: Arc<AtomicBool>,
+) -> Result<String> {
     state.db.with(|c| {
         c.execute(
             "INSERT INTO summaries(id, meeting_id, template_id, model_id, body_md, status, created_at) VALUES (?1, ?2, ?3, ?4, '', 'running', ?5)",
@@ -272,17 +307,26 @@ async fn summarise_validated(emit: Emit, state: &AppState, meeting_id: &str, sum
         )?;
         Ok(())
     })?;
-    emit(&SummaryEvent { meeting_id: meeting_id.to_string(), summary_id: summary_id.to_string(), token: None, status: "running".into(), error: None });
+    emit(&SummaryEvent {
+        meeting_id: meeting_id.to_string(),
+        summary_id: summary_id.to_string(),
+        token: None,
+        status: "running".into(),
+        error: None,
+    });
 
     let mid = meeting_id.to_string();
     let sid = summary_id.to_string();
     let emit2 = emit.clone();
     let cancel2 = cancel.clone();
-    let result: Result<(String, usize, usize)> =
-        match tokio::task::spawn_blocking(move || generate_blocking(emit2, &mid, &sid, &v.model_path, v.n_ctx, v.prepared, cancel2)).await {
-            Ok(r) => r,
-            Err(e) => Err(anyhow!("summary task panicked: {e}")),
-        };
+    let result: Result<(String, usize, usize)> = match tokio::task::spawn_blocking(move || {
+        generate_blocking(emit2, &mid, &sid, &v.model_path, v.n_ctx, v.prepared, cancel2)
+    })
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => Err(anyhow!("summary task panicked: {e}")),
+    };
 
     let cancelled = cancel.load(Ordering::Relaxed);
     let (status, error, body, tokens) = match &result {
@@ -342,16 +386,30 @@ fn generate_blocking(
             if cancel.load(Ordering::Relaxed) {
                 bail!("cancelled");
             }
-            let user = CHUNK_PROMPT.replace("{{part}}", &(i + 1).to_string()).replace("{{parts}}", &chunks.len().to_string()).replace("{{transcript}}", chunk);
+            let user = CHUNK_PROMPT
+                .replace("{{part}}", &(i + 1).to_string())
+                .replace("{{parts}}", &chunks.len().to_string())
+                .replace("{{transcript}}", chunk);
             let p = engine.render_chat(&[ChatMessage::system(SYSTEM_PROMPT), ChatMessage::user(user)])?;
-            let part = engine.generate(&p, GenParams { max_tokens: 700, ..params.clone() }, Box::new(|_| {}), cancel.clone())?;
+            let part = engine.generate(
+                &p,
+                GenParams { max_tokens: 700, ..params.clone() },
+                Box::new(|_| {}),
+                cancel.clone(),
+            )?;
             if part.cancelled {
                 bail!("cancelled");
             }
             notes.push_str(&format!("\n### Part {} of {}\n{}\n", i + 1, chunks.len(), part.text.trim()));
         }
         let condensed = format!("(Condensed notes of the full transcript, {} parts)\n{notes}", chunks.len());
-        (engine.render_chat(&[ChatMessage::system(SYSTEM_PROMPT), ChatMessage::user(fill(&prepared.body, &prepared.vars, &condensed))])?, true)
+        (
+            engine.render_chat(&[
+                ChatMessage::system(SYSTEM_PROMPT),
+                ChatMessage::user(fill(&prepared.body, &prepared.vars, &condensed)),
+            ])?,
+            true,
+        )
     };
 
     let prefill = if prepared.prefill { "## TL;DR\n" } else { "" };
@@ -366,10 +424,22 @@ fn generate_blocking(
         let e2 = emit.clone();
         let (mid, sid) = (meeting_id.to_string(), summary_id.to_string());
         if !prefill.is_empty() {
-            e2(&SummaryEvent { meeting_id: mid.clone(), summary_id: sid.clone(), token: Some(prefill.to_string()), status: "running".into(), error: None });
+            e2(&SummaryEvent {
+                meeting_id: mid.clone(),
+                summary_id: sid.clone(),
+                token: Some(prefill.to_string()),
+                status: "running".into(),
+                error: None,
+            });
         }
         let on_token: muesli_llm::TokenCallback = Box::new(move |t: &str| {
-            e2(&SummaryEvent { meeting_id: mid.clone(), summary_id: sid.clone(), token: Some(t.to_string()), status: "running".into(), error: None });
+            e2(&SummaryEvent {
+                meeting_id: mid.clone(),
+                summary_id: sid.clone(),
+                token: Some(t.to_string()),
+                status: "running".into(),
+                error: None,
+            });
         });
         let r = engine.generate(&prompt, attempt_params.clone(), on_token, cancel.clone())?;
         if r.cancelled {
@@ -379,7 +449,10 @@ fn generate_blocking(
         let ok = has_required_headings(&prepared.body, &text);
         tracing::info!(
             "summary attempt {attempt}: {} prompt tok ({:.1}s), {} out tok ({:.1}s), headings ok={ok}, reduced={reduced}",
-            r.prompt_tokens, r.prompt_seconds, r.output_tokens, r.gen_seconds
+            r.prompt_tokens,
+            r.prompt_seconds,
+            r.output_tokens,
+            r.gen_seconds
         );
         last = Some((text, r.prompt_tokens, r.output_tokens));
         if ok {
@@ -387,7 +460,13 @@ fn generate_blocking(
         }
         attempt_params.temperature = 0.1;
         attempt_params.seed = attempt_params.seed.wrapping_add(1);
-        emit(&SummaryEvent { meeting_id: meeting_id.into(), summary_id: summary_id.into(), token: Some("\n\n---\n(retrying for the required sections)\n\n".into()), status: "running".into(), error: None });
+        emit(&SummaryEvent {
+            meeting_id: meeting_id.into(),
+            summary_id: summary_id.into(),
+            token: Some("\n\n---\n(retrying for the required sections)\n\n".into()),
+            status: "running".into(),
+            error: None,
+        });
     }
     last.ok_or_else(|| anyhow!("no output"))
 }
@@ -400,7 +479,13 @@ type CmdResult<T> = Result<T, String>;
 /// are returned directly; generation itself runs in the background and reports
 /// through `summary:token` / `summary:done`.
 #[tauri::command]
-pub async fn summary_generate(app: AppHandle, state: State<'_, AppState>, jobs: State<'_, Arc<SummaryJobs>>, meeting_id: String, template_id: Option<String>) -> CmdResult<SummaryRunning> {
+pub async fn summary_generate(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    jobs: State<'_, Arc<SummaryJobs>>,
+    meeting_id: String,
+    template_id: Option<String>,
+) -> CmdResult<SummaryRunning> {
     if jobs.running.lock().await.is_some() {
         return Err("a summary is already being generated".into());
     }
@@ -412,7 +497,8 @@ pub async fn summary_generate(app: AppHandle, state: State<'_, AppState>, jobs: 
         if guard.is_some() {
             return Err("a summary is already being generated".into());
         }
-        *guard = Some(Running { meeting_id: meeting_id.clone(), summary_id: summary_id.clone(), cancel: cancel.clone() });
+        *guard =
+            Some(Running { meeting_id: meeting_id.clone(), summary_id: summary_id.clone(), cancel: cancel.clone() });
     }
     let app2 = app.clone();
     let jobs2 = jobs.inner().clone();
@@ -431,7 +517,12 @@ pub async fn summary_generate(app: AppHandle, state: State<'_, AppState>, jobs: 
 
 #[tauri::command]
 pub async fn summary_status(jobs: State<'_, Arc<SummaryJobs>>) -> CmdResult<Option<SummaryRunning>> {
-    Ok(jobs.running.lock().await.as_ref().map(|r| SummaryRunning { meeting_id: r.meeting_id.clone(), summary_id: r.summary_id.clone() }))
+    Ok(jobs
+        .running
+        .lock()
+        .await
+        .as_ref()
+        .map(|r| SummaryRunning { meeting_id: r.meeting_id.clone(), summary_id: r.summary_id.clone() }))
 }
 
 #[tauri::command]
@@ -478,14 +569,23 @@ fn export_bundle(state: &AppState, meeting_id: &str, summary_id: Option<&str>) -
 
 /// Markdown summary with front-matter and the plain-text transcript, for copying.
 #[tauri::command]
-pub fn meeting_export(state: State<'_, AppState>, meeting_id: String, summary_id: Option<String>) -> CmdResult<ExportBundle> {
+pub fn meeting_export(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    summary_id: Option<String>,
+) -> CmdResult<ExportBundle> {
     export_bundle(&state, &meeting_id, summary_id.as_deref()).map_err(|e| e.to_string())
 }
 
 /// Write the summary to `path` (chosen by the user in a save dialog) and the
 /// transcript next to it as `<name>.transcript.txt`.
 #[tauri::command]
-pub async fn meeting_export_to(state: State<'_, AppState>, meeting_id: String, summary_id: Option<String>, path: String) -> CmdResult<Vec<String>> {
+pub async fn meeting_export_to(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    summary_id: Option<String>,
+    path: String,
+) -> CmdResult<Vec<String>> {
     let bundle = export_bundle(&state, &meeting_id, summary_id.as_deref()).map_err(|e| e.to_string())?;
     let summary_path = std::path::PathBuf::from(&path);
     if summary_path.extension().and_then(|e| e.to_str()) != Some("md") {

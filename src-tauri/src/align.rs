@@ -89,8 +89,20 @@ pub fn build_turns(words: &[AsrWord], diar: &[DiarSegment], max_gap_s: f64, max_
                 let mid = (w.s + w.e) / 2.0;
                 diar.iter()
                     .min_by(|a, b| {
-                        let da = if mid < a.s { a.s - mid } else if mid > a.e { mid - a.e } else { 0.0 };
-                        let db = if mid < b.s { b.s - mid } else if mid > b.e { mid - b.e } else { 0.0 };
+                        let da = if mid < a.s {
+                            a.s - mid
+                        } else if mid > a.e {
+                            mid - a.e
+                        } else {
+                            0.0
+                        };
+                        let db = if mid < b.s {
+                            b.s - mid
+                        } else if mid > b.e {
+                            mid - b.e
+                        } else {
+                            0.0
+                        };
                         da.partial_cmp(&db).unwrap()
                     })
                     .map(|d| d.speaker.clone())
@@ -180,10 +192,8 @@ pub fn speaker_stats(turns: &[Turn]) -> (SpeakerStats, Option<String>) {
             e.2 += dur;
         }
     }
-    let stats: SpeakerStats = acc
-        .into_iter()
-        .map(|(k, (ms, w, n))| (k, (ms, if n > 0 { Some(w / n as f64) } else { None })))
-        .collect();
+    let stats: SpeakerStats =
+        acc.into_iter().map(|(k, (ms, w, n))| (k, (ms, if n > 0 { Some(w / n as f64) } else { None }))).collect();
     let me = stats
         .iter()
         .filter_map(|(k, (_, r))| r.map(|r| (k.clone(), r)))
@@ -215,7 +225,8 @@ mod tests {
 
     #[test]
     fn words_follow_diarisation_and_merge_into_turns() {
-        let words = vec![w("hello", 0.0, 0.4), w("there", 0.5, 0.9), w("hi", 2.0, 2.3), w("back", 2.4, 2.8), w("ok", 5.0, 5.2)];
+        let words =
+            vec![w("hello", 0.0, 0.4), w("there", 0.5, 0.9), w("hi", 2.0, 2.3), w("back", 2.4, 2.8), w("ok", 5.0, 5.2)];
         let diar = vec![
             DiarSegment { speaker: "S1".into(), s: 0.0, e: 1.0, q: 1.0 },
             DiarSegment { speaker: "S2".into(), s: 1.9, e: 3.0, q: 1.0 },

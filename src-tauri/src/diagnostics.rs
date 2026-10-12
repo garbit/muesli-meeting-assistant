@@ -13,10 +13,10 @@ use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 use tracing_subscriber::prelude::*;
 
+use crate::AppState;
 use crate::models;
 use crate::paths::Paths;
 use crate::sidecar::{Role, Sidecar};
-use crate::AppState;
 
 const LOG_FILE_PREFIX: &str = "muesli.log";
 const LOG_RETENTION_DAYS: u64 = 14;
@@ -88,8 +88,12 @@ pub struct JobRow {
 
 pub fn jobs_for(c: &Connection, meeting_id: Option<&str>, limit: usize) -> Result<Vec<JobRow>> {
     let sql = match meeting_id {
-        Some(_) => "SELECT id, meeting_id, kind, stage, state, error, created_at, finished_at FROM jobs WHERE meeting_id = ?1 ORDER BY created_at DESC LIMIT ?2",
-        None => "SELECT id, meeting_id, kind, stage, state, error, created_at, finished_at FROM jobs WHERE ?1 IS NULL ORDER BY created_at DESC LIMIT ?2",
+        Some(_) => {
+            "SELECT id, meeting_id, kind, stage, state, error, created_at, finished_at FROM jobs WHERE meeting_id = ?1 ORDER BY created_at DESC LIMIT ?2"
+        }
+        None => {
+            "SELECT id, meeting_id, kind, stage, state, error, created_at, finished_at FROM jobs WHERE ?1 IS NULL ORDER BY created_at DESC LIMIT ?2"
+        }
     };
     let mut stmt = c.prepare(sql)?;
     let rows = stmt.query_map(rusqlite::params![meeting_id, limit as i64], |r| {
@@ -129,15 +133,30 @@ fn sw_vers() -> String {
 pub async fn report(state: &AppState) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# Muesli diagnostics ({})", chrono::Local::now().to_rfc3339());
-    let _ = writeln!(out, "version: {}  build: {}", env!("CARGO_PKG_VERSION"), crate::permissions::current_code_hash().unwrap_or_default());
-    let _ = writeln!(out, "macOS: {}  machine: {}  memory: {} GB", sw_vers(), sysctl("hw.model"), sysctl("hw.memsize").parse::<u64>().unwrap_or(0) / 1_073_741_824);
+    let _ = writeln!(
+        out,
+        "version: {}  build: {}",
+        env!("CARGO_PKG_VERSION"),
+        crate::permissions::current_code_hash().unwrap_or_default()
+    );
+    let _ = writeln!(
+        out,
+        "macOS: {}  machine: {}  memory: {} GB",
+        sw_vers(),
+        sysctl("hw.model"),
+        sysctl("hw.memsize").parse::<u64>().unwrap_or(0) / 1_073_741_824
+    );
     let _ = writeln!(out, "data: {}  models: {}", state.paths.root.display(), state.paths.models.display());
     if let Ok(exe) = std::env::current_exe() {
         let _ = writeln!(out, "executable: {}", exe.display());
     }
     match crate::settings::load(&state.db) {
-        Ok(s) => { let _ = writeln!(out, "settings: {}", serde_json::to_string(&s).unwrap_or_default()); }
-        Err(e) => { let _ = writeln!(out, "settings: error {e}"); }
+        Ok(s) => {
+            let _ = writeln!(out, "settings: {}", serde_json::to_string(&s).unwrap_or_default());
+        }
+        Err(e) => {
+            let _ = writeln!(out, "settings: error {e}");
+        }
     }
 
     let _ = writeln!(out, "\n## Models");
@@ -150,37 +169,76 @@ pub async fn report(state: &AppState) -> String {
             match sc.call_timeout("models.status", json!({}), std::time::Duration::from_secs(15)).await {
                 Ok(v) => {
                     for item in v.as_array().cloned().unwrap_or_default() {
-                        let _ = writeln!(out, "- {} installed={} missing={}", item["id"].as_str().unwrap_or("?"), item["installed"], item["missing"]);
+                        let _ = writeln!(
+                            out,
+                            "- {} installed={} missing={}",
+                            item["id"].as_str().unwrap_or("?"),
+                            item["installed"],
+                            item["missing"]
+                        );
                     }
                 }
-                Err(e) => { let _ = writeln!(out, "- sidecar models.status failed: {e}"); }
+                Err(e) => {
+                    let _ = writeln!(out, "- sidecar models.status failed: {e}");
+                }
             }
             match sc.health().await {
-                Ok(v) => { let _ = writeln!(out, "sidecar: {v}"); }
-                Err(e) => { let _ = writeln!(out, "sidecar health failed: {e}"); }
+                Ok(v) => {
+                    let _ = writeln!(out, "sidecar: {v}");
+                }
+                Err(e) => {
+                    let _ = writeln!(out, "sidecar health failed: {e}");
+                }
             }
             sc.shutdown().await;
         }
-        Err(e) => { let _ = writeln!(out, "- sidecar unavailable: {e}"); }
+        Err(e) => {
+            let _ = writeln!(out, "- sidecar unavailable: {e}");
+        }
     }
 
     let _ = writeln!(out, "\n## Meetings");
     if let Ok(rows) = state.db.with(|c| {
-        let mut stmt = c.prepare("SELECT id, title, state, source, duration_ms, created_at FROM meetings ORDER BY created_at DESC LIMIT 10")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<i64>>(4)?, r.get::<_, String>(5)?)))?;
+        let mut stmt = c.prepare(
+            "SELECT id, title, state, source, duration_ms, created_at FROM meetings ORDER BY created_at DESC LIMIT 10",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, Option<i64>>(4)?,
+                r.get::<_, String>(5)?,
+            ))
+        })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }) {
         for (id, title, st, src, dur, created) in rows {
             let dir = state.paths.meeting_dir(&id);
-            let files: Vec<String> = std::fs::read_dir(&dir).map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect()).unwrap_or_default();
-            let _ = writeln!(out, "- {id} \"{title}\" state={st} source={src} duration_ms={dur:?} created={created} files={files:?}");
+            let files: Vec<String> = std::fs::read_dir(&dir)
+                .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect())
+                .unwrap_or_default();
+            let _ = writeln!(
+                out,
+                "- {id} \"{title}\" state={st} source={src} duration_ms={dur:?} created={created} files={files:?}"
+            );
         }
     }
 
     let _ = writeln!(out, "\n## Recent jobs");
     if let Ok(jobs) = state.db.with(|c| jobs_for(c, None, 10)) {
         for j in jobs {
-            let _ = writeln!(out, "- {} {} {} stage={} state={} error={:?}", j.created_at, &j.id[..8], j.kind, j.stage.unwrap_or_default(), j.state, j.error);
+            let _ = writeln!(
+                out,
+                "- {} {} {} stage={} state={} error={:?}",
+                j.created_at,
+                &j.id[..8],
+                j.kind,
+                j.stage.unwrap_or_default(),
+                j.state,
+                j.error
+            );
         }
     }
 
@@ -197,8 +255,12 @@ pub async fn report(state: &AppState) -> String {
 
     let _ = writeln!(out, "\n## Log tail");
     match current_log_file(&state.paths) {
-        Some(p) => { let _ = writeln!(out, "{}\n{}", p.display(), tail(&p, 150)); }
-        None => { let _ = writeln!(out, "(no log file yet)"); }
+        Some(p) => {
+            let _ = writeln!(out, "{}\n{}", p.display(), tail(&p, 150));
+        }
+        None => {
+            let _ = writeln!(out, "(no log file yet)");
+        }
     }
     out
 }

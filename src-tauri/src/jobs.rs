@@ -2,22 +2,22 @@
 //! fresh `process` sidecar (decode → ASR → diarise), then aligns and stores the
 //! transcript in Rust and, if enabled, summarises it.
 
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use rusqlite::params;
 use serde::Serialize;
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 
+use crate::AppState;
 use crate::align::{self, AsrOutput, DecodedAudio, DiarOutput, Turn};
-use crate::db::{new_id, now_iso, Db};
+use crate::db::{Db, new_id, now_iso};
 use crate::meetings;
 use crate::sidecar::{Role, Sidecar};
-use crate::AppState;
 
 /// Serialises processing so only one sidecar + LLM run at a time, and remembers
 /// the running job so the UI can cancel it.
@@ -74,7 +74,13 @@ pub fn app_emitter(app: AppHandle) -> Emit {
 
 pub fn stdout_emitter() -> Emit {
     Arc::new(|p: &JobProgress| {
-        eprintln!("[job {}] {} {:>3}% {}", &p.job_id[..8], p.stage, (p.fraction * 100.0) as u32, p.error.clone().unwrap_or_default());
+        eprintln!(
+            "[job {}] {} {:>3}% {}",
+            &p.job_id[..8],
+            p.stage,
+            (p.fraction * 100.0) as u32,
+            p.error.clone().unwrap_or_default()
+        );
     })
 }
 
@@ -101,7 +107,15 @@ pub fn enqueue_processing(app: AppHandle, meeting_id: String) {
                 if settings.auto_summarise {
                     let jobs = app.state::<Arc<crate::summarise::SummaryJobs>>().inner().clone();
                     let emit = crate::summarise::app_emitter(app.clone());
-                    if let Err(e) = crate::summarise::summarise_tracked(emit, &state, &jobs, &meeting_id, Some(&settings.default_template_id)).await {
+                    if let Err(e) = crate::summarise::summarise_tracked(
+                        emit,
+                        &state,
+                        &jobs,
+                        &meeting_id,
+                        Some(&settings.default_template_id),
+                    )
+                    .await
+                    {
                         tracing::warn!("auto-summary skipped for {meeting_id}: {e:#}");
                     }
                 }
@@ -128,7 +142,12 @@ pub fn mark_interrupted(db: &Db) -> Result<()> {
     })
 }
 
-pub async fn run_processing(emit: &Emit, state: &AppState, meeting_id: &str, queue: Option<&Arc<JobQueue>>) -> Result<()> {
+pub async fn run_processing(
+    emit: &Emit,
+    state: &AppState,
+    meeting_id: &str,
+    queue: Option<&Arc<JobQueue>>,
+) -> Result<()> {
     let db = state.db.clone();
     let (recording_path, is_retained) = db.with(|c| {
         let rec = meetings::get_recording(c, meeting_id)?.ok_or_else(|| anyhow!("meeting has no recording"))?;
@@ -155,7 +174,18 @@ pub async fn run_processing(emit: &Emit, state: &AppState, meeting_id: &str, que
     emit(&progress);
 
     let cancel = Arc::new(AtomicBool::new(false));
-    let result = run_stages(emit, state, meeting_id, &recording_path, is_retained, &job_id, &mut progress, queue, cancel.clone()).await;
+    let result = run_stages(
+        emit,
+        state,
+        meeting_id,
+        &recording_path,
+        is_retained,
+        &job_id,
+        &mut progress,
+        queue,
+        cancel.clone(),
+    )
+    .await;
     if let Some(q) = queue {
         *q.current.lock().await = None;
     }
@@ -166,7 +196,10 @@ pub async fn run_processing(emit: &Emit, state: &AppState, meeting_id: &str, que
             progress.fraction = 1.0;
             progress.stage = "done".into();
             db.with(|c| {
-                c.execute("UPDATE jobs SET state = 'done', pct = 1, stage = 'done', finished_at = ?2 WHERE id = ?1", params![job_id, now_iso()])?;
+                c.execute(
+                    "UPDATE jobs SET state = 'done', pct = 1, stage = 'done', finished_at = ?2 WHERE id = ?1",
+                    params![job_id, now_iso()],
+                )?;
                 meetings::set_state(c, meeting_id, "transcribed")?;
                 Ok(())
             })?;
@@ -209,7 +242,12 @@ async fn run_stages(
 
     let sc = Sidecar::spawn_logged(Role::Process, &state.paths.fluid_models(), Some(dir.join("process.log"))).await?;
     if let Some(q) = queue {
-        *q.current.lock().await = Some(RunningJob { meeting_id: meeting_id.to_string(), job_id: job_id.to_string(), sidecar: sc.clone(), cancel: cancel.clone() });
+        *q.current.lock().await = Some(RunningJob {
+            meeting_id: meeting_id.to_string(),
+            job_id: job_id.to_string(),
+            sidecar: sc.clone(),
+            cancel: cancel.clone(),
+        });
     }
     // Forward sidecar progress to the UI, mapped onto the overall job.
     let mut rx = sc.subscribe();
@@ -297,7 +335,13 @@ fn turns_for(asr: &AsrOutput, diar: &DiarOutput) -> Vec<Turn> {
     }
     let words: Vec<&str> = text.split_whitespace().collect();
     if diar.segments.is_empty() {
-        return vec![Turn { start_ms: 0, end_ms: (asr.duration_s * 1000.0) as i64, text: text.to_string(), label: "S1".into(), mic_ratio: None }];
+        return vec![Turn {
+            start_ms: 0,
+            end_ms: (asr.duration_s * 1000.0) as i64,
+            text: text.to_string(),
+            label: "S1".into(),
+            mic_ratio: None,
+        }];
     }
     let total: f64 = diar.segments.iter().map(|s| (s.e - s.s).max(0.0)).sum::<f64>().max(1e-3);
     let mut turns = Vec::new();
@@ -319,7 +363,13 @@ fn turns_for(asr: &AsrOutput, diar: &DiarOutput) -> Vec<Turn> {
     turns
 }
 
-fn store_transcript(state: &AppState, meeting_id: &str, asr: &AsrOutput, diar: &DiarOutput, decoded: &DecodedAudio) -> Result<()> {
+fn store_transcript(
+    state: &AppState,
+    meeting_id: &str,
+    asr: &AsrOutput,
+    diar: &DiarOutput,
+    decoded: &DecodedAudio,
+) -> Result<()> {
     let mut turns = turns_for(asr, diar);
     for t in &mut turns {
         t.mic_ratio = align::mic_ratio(decoded.energy.as_ref(), t.start_ms, t.end_ms);
@@ -388,7 +438,10 @@ fn store_transcript(state: &AppState, meeting_id: &str, asr: &AsrOutput, diar: &
 // ---- commands -------------------------------------------------------------
 
 #[tauri::command]
-pub async fn meeting_cancel_processing(queue: tauri::State<'_, Arc<JobQueue>>, meeting_id: String) -> Result<bool, String> {
+pub async fn meeting_cancel_processing(
+    queue: tauri::State<'_, Arc<JobQueue>>,
+    meeting_id: String,
+) -> Result<bool, String> {
     Ok(queue.cancel(Some(&meeting_id)).await)
 }
 
@@ -399,7 +452,12 @@ mod tests {
 
     #[test]
     fn text_without_timings_is_spread_over_segments() {
-        let asr = AsrOutput { engine: "x".into(), text: "one two three four five six".into(), words: vec![], duration_s: 6.0 };
+        let asr = AsrOutput {
+            engine: "x".into(),
+            text: "one two three four five six".into(),
+            words: vec![],
+            duration_s: 6.0,
+        };
         let diar = DiarOutput {
             engine: "d".into(),
             segments: vec![

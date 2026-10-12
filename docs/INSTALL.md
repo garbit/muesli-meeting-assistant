@@ -30,6 +30,9 @@
 
 ## After an update
 
+**Settings → Check for updates** downloads the new version from the GitHub release,
+verifies its signature and relaunches Muesli.
+
 Muesli is signed ad-hoc, so macOS treats every build as a new application and
 forgets the two permissions above. After an update, open **Settings →
 Permissions** and re-grant them. This goes away once releases are signed with a

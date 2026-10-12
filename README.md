@@ -29,9 +29,11 @@ scripts/build-sidecar.sh      # Swift sidecar (needs only Command Line Tools)
 pnpm tauri dev                # or: pnpm tauri build --debug for a real bundle
 ```
 
-Release builds on CI sign the updater artifacts with `TAURI_SIGNING_PRIVATE_KEY`;
-local builds skip that step (`createUpdaterArtifacts` is enabled only by the
-release workflow).
+Every pull request runs `cargo fmt --check`, clippy, the unit tests, the frontend
+build and a full `pnpm tauri build`; the DMG is attached to the run as the
+`muesli-dmg` artifact. Tagged releases are built by CI and opened as drafts; see
+[docs/RELEASING.md](docs/RELEASING.md). Local builds never produce updater
+artifacts (`createUpdaterArtifacts` is enabled only by the release workflow).
 
 Microphone and System Audio Recording permissions are granted to the process
 that launches the recorder. When running from `pnpm tauri dev`, that is your
