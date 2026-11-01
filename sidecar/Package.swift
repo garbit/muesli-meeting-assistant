@@ -8,7 +8,7 @@ let package = Package(
         .executable(name: "muesli-sidecar", targets: ["MuesliSidecar"])
     ],
     dependencies: [
-        .package(url: "https://github.com/FluidInference/FluidAudio", exact: "0.17.7")
+        .package(url: "https://github.com/FluidInference/FluidAudio", exact: "0.18.0")
     ],
     targets: [
         .executableTarget(
